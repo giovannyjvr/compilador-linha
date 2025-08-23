@@ -19,7 +19,7 @@ class Lexer:
         
         while self.source[self.position] == " " :
             self.position += 1  
-            if self.position >= len(self.source)-1:
+            if self.position >= len(self.source):
                 self.next = Token("EOF", "")
                 return
 
