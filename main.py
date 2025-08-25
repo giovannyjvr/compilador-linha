@@ -75,7 +75,7 @@ class Parser:
                 resultado *= Parser.parse_factor()
             elif Parser.lex.next.kind == "DIV":
                 Parser.lex.select_next()
-                resultado /= Parser.parse_factor()
+                resultado //= Parser.parse_factor()
         return resultado
 
     def parse_factor():
