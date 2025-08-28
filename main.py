@@ -44,10 +44,10 @@ class Lexer:
             self.next = Token("DIV", self.source[self.position])
             self.position += 1
         elif self.source[self.position] == "(":
-            self.next = Token("LPAREN", self.source[self.position])
+            self.next = Token("OPEN_PAR", self.source[self.position])
             self.position += 1
         elif self.source[self.position] == ")":
-            self.next = Token("RPAREN", self.source[self.position])
+            self.next = Token("CLOSE_PAR", self.source[self.position])
             self.position += 1
         else:
             raise Exception(f"Caracter inválido: {self.source[self.position]}")
@@ -83,10 +83,10 @@ class Parser:
             resultado = Parser.lex.next.value
             Parser.lex.select_next()
             return resultado
-        elif Parser.lex.next.kind == "LPAREN":
+        elif Parser.lex.next.kind == "OPEN_PAR":
             Parser.lex.select_next()
             resultado = Parser.parse_expression()
-            if Parser.lex.next.kind != "RPAREN":
+            if Parser.lex.next.kind != "CLOSE_PAR":
                 raise Exception("Faltando )")
             Parser.lex.select_next()
             return resultado
