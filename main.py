@@ -37,7 +37,7 @@ class Lexer:
                 return
             
         if self.source[self.position].isalpha():
-            reservadas = {"print": "PRINT"}
+            reservadas = {"Println": "PRINT"}
             idnt = self.source[self.position]
             self.position += 1
             while self.position < len(self.source) and (self.source[self.position].isalnum() or self.source[self.position] == "_"):
