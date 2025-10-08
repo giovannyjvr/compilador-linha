@@ -37,7 +37,13 @@ class Lexer:
                 return
             
         if self.source[self.position].isalpha():
-            reservadas = {"Println": "PRINT"}
+            reservadas = {"Println": "PRINT",
+                          "if": "IF",
+                          "else": "ELSE",
+                          "for": "WHILE",
+                          "Scanln": "READ",
+                          }
+            
             idnt = self.source[self.position]
             self.position += 1
             while self.position < len(self.source) and (self.source[self.position].isalnum() or self.source[self.position] == "_"):
@@ -83,12 +89,53 @@ class Lexer:
             self.position += 1
 
         elif self.source[self.position] == "=":
-            self.next = Token("ASSIGN", self.source[self.position])
-            self.position += 1
+            # Pode ser atribuição ou comparação ==
+            if self.position + 1 < len(self.source) and self.source[self.position + 1] == "=":
+                self.next = Token("EQUAL", "==")
+                self.position += 2
+            else:
+                self.next = Token("ASSIGN", self.source[self.position])
+                self.position += 1
 
         elif self.source[self.position] == "\n":
             self.next = Token("END", "\\n")  # ou só "\n"
             self.position += 1
+
+        elif self.source[self.position] == "&":
+            if self.position + 1 < len(self.source) and self.source[self.position + 1] == "&":
+                self.next = Token("AND", "&&")
+                self.position += 2
+            else:
+                raise Exception(f"Caracter inválido: {self.source[self.position]}")
+            
+        elif self.source[self.position] == "|":
+            if self.position + 1 < len(self.source) and self.source[self.position + 1] == "|":
+                self.next = Token("OR", "||")
+                self.position += 2
+            else:
+                raise Exception(f"Caracter inválido: {self.source[self.position]}")
+            
+        elif self.source[self.position] == "!":
+            self.next = Token("NOT", "!")
+            self.position += 1
+        
+        # Abre e fecha chaves para blocos de código
+        elif self.source[self.position] == "{":
+            self.next = Token("OPEN_BRA", "{")
+            self.position += 1
+        elif self.source[self.position] == "}":
+            self.next = Token("CLOSE_BRA", "}")
+            self.position += 1
+
+        # Operadores relacionais: <, >   || LT e GT
+        elif self.source[self.position] == "<":
+            self.next = Token("LT", "<")
+            self.position += 1
+        elif self.source[self.position] == ">":
+            self.next = Token("GT", ">")
+            self.position += 1
+        
+        
         
         else:
             raise Exception(f"Caracter inválido: {self.source[self.position]}")
@@ -138,6 +185,18 @@ class BinOp(Node):
             return left_val * right_val
         elif self.value == "DIV":
             return left_val // right_val
+        elif self.value == "EQUAL":
+            return 1 if left_val == right_val else 0
+        elif self.value == "LT":
+            return 1 if left_val < right_val else 0
+        elif self.value == "GT":   
+            return 1 if left_val > right_val else 0
+        elif self.value == "AND":
+            return 1 if (left_val != 0 and right_val != 0) else 0
+        elif self.value == "OR":
+            return 1 if (left_val != 0 or right_val != 0) else 0
+        else:
+            raise Exception(f"Operador binário desconhecido: {self.value}")
 
 
 class UnOp(Node):
@@ -149,12 +208,16 @@ class UnOp(Node):
             return val
         elif self.value == "MINUS":
             return -val
+        elif self.value == "NOT":
+            return 1 if val == 0 else 0
+        else:
+            raise Exception(f"Operador unário desconhecido: {self.value}")
 
 class IntVal(Node):
     def evaluate(self, st: SymbolTable):
         return self.value
 
-class NoOp():
+class NoOp(Node):
     def evaluate(self, st):
         pass
 
@@ -179,6 +242,25 @@ class Print(Node):
         value = self.children[0].evaluate(st)
         print(value)
 
+class While(Node):
+    def evaluate(self, st: SymbolTable):
+        while self.children[0].evaluate(st) != 0: # 0 é falso
+            self.children[1].evaluate(st)
+
+class If(Node):
+    def evaluate(self, st: SymbolTable):
+        if self.children[0].evaluate(st) != 0: # 0 é falso
+            self.children[1].evaluate(st)
+        elif len(self.children) == 3: # existe o bloco else
+            self.children[2].evaluate(st)
+            
+class Read(Node):
+    def evaluate(self, st: SymbolTable):
+        value = int(input())
+        return value   
+    
+
+
 
 class Parser:
     def parse_program() -> Block:
@@ -186,32 +268,112 @@ class Parser:
         while Parser.lex.next.kind != "EOF":
             statements.append(Parser.parse_statement())
         return Block("BLOCK",statements)
+    
+    def parse_block() -> Block:
+        if Parser.lex.next.kind == "OPEN_BRA":
+            Parser.lex.select_next() # Avança para o próximo token
+            children = []
+            while Parser.lex.next.kind != "CLOSE_BRA":
+                node = Parser.parse_statement()
+                children.append(node)
+            if Parser.lex.next.kind == "CLOSE_BRA":
+                Parser.lex.select_next() # Avança para o próximo token
+                return Block("BLOCK", children)
+            else:
+                raise Exception("Erro: esperado '}' no final do bloco")
+        else:
+            raise Exception("Erro: esperado '{' no início do bloco")
+    
+
 
     def parse_statement() -> Node:
-        if Parser.lex.next.kind == "IDEN":
+        if Parser.lex.next.kind == "END":
+            folha = NoOp("NoOp", [])
+            Parser.lex.select_next()
+            return folha
+        elif Parser.lex.next.kind == "IDEN":
             id_node = Identifier(Parser.lex.next.value, [])
             Parser.lex.select_next()
             if Parser.lex.next.kind != "ASSIGN":
                 raise Exception("Esperado '=' após identificador.")
             Parser.lex.select_next()
-            expr_node = Parser.parse_expression()
+            expr_node = Parser.parseBoolExpression()
             if Parser.lex.next.kind != "END":
                 raise Exception("Esperado fim de linha após expressão.")
             Parser.lex.select_next()
             return Assignment("ASSIGN", [id_node, expr_node])
         
+        elif Parser.lex.next.kind == "IF":
+            Parser.lex.select_next()
+            if Parser.lex.next.kind != "OPEN_PAR":
+                raise Exception("Esperado '(' após 'if'.")
+            Parser.lex.select_next()
+            cond_node = Parser.parseBoolExpression()
+            if Parser.lex.next.kind != "CLOSE_PAR":
+                raise Exception("Esperado ')' após condição.")
+            Parser.lex.select_next()
+            then_node = Parser.parse_statement()
+            else_node = None
+            if Parser.lex.next.kind == "ELSE":
+                Parser.lex.select_next()
+                else_node = Parser.parse_statement()
+                return If("IF", [cond_node, then_node, else_node])
+            return If("IF", [cond_node, then_node])
+        
+        elif Parser.lex.next.kind == "WHILE":
+            Parser.lex.select_next()
+            if Parser.lex.next.kind != "OPEN_PAR":
+                raise Exception("Esperado '(' após 'for'.")
+            Parser.lex.select_next()
+            cond_node = Parser.parseBoolExpression()
+            if Parser.lex.next.kind != "CLOSE_PAR":
+                raise Exception("Esperado ')' após condição.")
+            Parser.lex.select_next()
+            body_node = Parser.parse_block()
+            return While("WHILE", [cond_node, body_node])  
+        
         elif Parser.lex.next.kind == "PRINT":
             Parser.lex.select_next()
-            expr_node = Parser.parse_expression()
+            if Parser.lex.next.kind != "OPEN_PAR":
+                raise Exception("Esperado '(' após 'Println'.")
+            Parser.lex.select_next()
+            expr_node = Parser.parseBoolExpression()
+            if Parser.lex.next.kind != "CLOSE_PAR":
+                raise Exception("Esperado ')' após expressão.")
+            Parser.lex.select_next()
             if Parser.lex.next.kind != "END":
                 raise Exception("Esperado fim de linha após expressão.")
             Parser.lex.select_next()
             return Print("PRINT", [expr_node])
-        elif Parser.lex.next.kind == "END":
-            Parser.lex.select_next()
-            return NoOp()
+        
+        elif Parser.lex.next.kind == "OPEN_BRA":
+            return Parser.parse_block()
+        
         else:
-            raise Exception("Início de comando inválido.")
+            raise Exception(f"Token inesperado: {Parser.lex.next.kind}")
+        
+
+    def parseBoolExpression() -> int:
+        node = Parser.parseBoolTerm()
+        if Parser.lex.next.kind == "OR":
+            Parser.lex.select_next()
+            node = BinOp("OR", [node, Parser.parseBoolTerm()])
+        return node
+    
+    def parseBoolTerm() -> int:
+        node = Parser.parser_relExpression()
+        if Parser.lex.next.kind == "AND":
+            Parser.lex.select_next()
+            node = BinOp("AND", [node, Parser.parser_relExpression()])
+        return node
+    
+    def parser_relExpression() -> int:
+        node = Parser.parse_expression()
+        if Parser.lex.next.kind in ("EQUAL", "LT", "GT"):
+            op = Parser.lex.next.kind
+            Parser.lex.select_next()
+            node = BinOp(op, [node, Parser.parse_expression()])
+        return node
 
     def parse_expression() -> int:
         node = Parser.parse_term()
@@ -235,28 +397,51 @@ class Parser:
                 node = BinOp("DIV", [node, Parser.parse_factor()])
         return node
 
+
+    # Corrigir a função parseFactor() para incluir a operação unária NOT e a função READ.
+
+
     def parse_factor():
         if Parser.lex.next.kind == "INT":
             node = IntVal(Parser.lex.next.value,[])
             Parser.lex.select_next()
             return node
+        
         elif Parser.lex.next.kind == "OPEN_PAR":
             Parser.lex.select_next()
-            node = Parser.parse_expression()
+            node = Parser.parseBoolExpression()
             if Parser.lex.next.kind != "CLOSE_PAR":
                 raise Exception("Faltando )")
             Parser.lex.select_next()
             return node
+        
+        elif Parser.lex.next.kind == "READ":
+            Parser.lex.select_next()
+            if Parser.lex.next.kind != "OPEN_PAR":
+                raise Exception("Esperado '(' após 'Scanln'.")
+            Parser.lex.select_next()
+            if Parser.lex.next.kind != "CLOSE_PAR":
+                raise Exception("Esperado ')' após 'Scanln('.")
+            Parser.lex.select_next()
+            return Read("READ", [])
+        
+        elif Parser.lex.next.kind == "NOT":
+            Parser.lex.select_next()
+            return UnOp("NOT", [Parser.parse_factor()])
+        
         elif Parser.lex.next.kind == "MINUS":
             Parser.lex.select_next()
             return UnOp("MINUS", [Parser.parse_factor()])
+        
         elif Parser.lex.next.kind == "PLUS":
             Parser.lex.select_next()
             return UnOp("PLUS", [Parser.parse_factor()])
+        
         elif Parser.lex.next.kind == "IDEN":
             node = Identifier(Parser.lex.next.value, [])
             Parser.lex.select_next()
             return node
+        
         else:
             raise Exception("Fator inválido")
         
