@@ -306,10 +306,18 @@ class Parser:
         elif Parser.lex.next.kind == "IF":
             Parser.lex.select_next()
             cond_node = Parser.parseBoolExpression()
+            if Parser.lex.next.kind == "END":
+                raise Exception("Unexpected token NEWLINE")
+            if Parser.lex.next.kind != "OPEN_BRA":
+                raise Exception("Esperado '{' após condição do if/for")
             then_node = Parser.parse_statement()
             else_node = None
             if Parser.lex.next.kind == "ELSE":
                 Parser.lex.select_next()
+                if Parser.lex.next.kind == "END":
+                    raise Exception("Unexpected token NEWLINE")
+                if Parser.lex.next.kind != "OPEN_BRA":
+                    raise Exception("Esperado '{' após else")
                 else_node = Parser.parse_statement()
                 return If("IF", [cond_node, then_node, else_node])
             return If("IF", [cond_node, then_node])
