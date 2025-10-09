@@ -276,6 +276,8 @@ class Parser:
                 node = Parser.parse_statement()
                 children.append(node)
             if Parser.lex.next.kind == "CLOSE_BRA":
+                if len(children) == 0:
+                    raise Exception("Erro: bloco vazio não é permitido")
                 Parser.lex.select_next() # Avança para o próximo token
                 return Block("BLOCK", children)
             else:
@@ -308,16 +310,12 @@ class Parser:
             cond_node = Parser.parseBoolExpression()
             if Parser.lex.next.kind == "END":
                 raise Exception("Unexpected token NEWLINE")
-            if Parser.lex.next.kind != "OPEN_BRA":
-                raise Exception("Esperado '{' após condição do if/for")
             then_node = Parser.parse_statement()
             else_node = None
             if Parser.lex.next.kind == "ELSE":
                 Parser.lex.select_next()
                 if Parser.lex.next.kind == "END":
                     raise Exception("Unexpected token NEWLINE")
-                if Parser.lex.next.kind != "OPEN_BRA":
-                    raise Exception("Esperado '{' após else")
                 else_node = Parser.parse_statement()
                 return If("IF", [cond_node, then_node, else_node])
             return If("IF", [cond_node, then_node])
@@ -325,6 +323,8 @@ class Parser:
         elif Parser.lex.next.kind == "WHILE":
             Parser.lex.select_next()
             cond_node = Parser.parseBoolExpression()
+            if Parser.lex.next.kind == "END":
+                raise Exception("Unexpected token NEWLINE")
             body_node = Parser.parse_block()
             return While("WHILE", [cond_node, body_node])  
         
