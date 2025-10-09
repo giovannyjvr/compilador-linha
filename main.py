@@ -1,5 +1,4 @@
 import sys
-import token
 import re
 
 class Token:
@@ -291,6 +290,7 @@ class Parser:
             folha = NoOp("NoOp", [])
             Parser.lex.select_next()
             return folha
+        
         elif Parser.lex.next.kind == "IDEN":
             id_node = Identifier(Parser.lex.next.value, [])
             Parser.lex.select_next()
@@ -305,13 +305,7 @@ class Parser:
         
         elif Parser.lex.next.kind == "IF":
             Parser.lex.select_next()
-            if Parser.lex.next.kind != "OPEN_PAR":
-                raise Exception("Esperado '(' após 'if'.")
-            Parser.lex.select_next()
             cond_node = Parser.parseBoolExpression()
-            if Parser.lex.next.kind != "CLOSE_PAR":
-                raise Exception("Esperado ')' após condição.")
-            Parser.lex.select_next()
             then_node = Parser.parse_statement()
             else_node = None
             if Parser.lex.next.kind == "ELSE":
@@ -322,13 +316,7 @@ class Parser:
         
         elif Parser.lex.next.kind == "WHILE":
             Parser.lex.select_next()
-            if Parser.lex.next.kind != "OPEN_PAR":
-                raise Exception("Esperado '(' após 'for'.")
-            Parser.lex.select_next()
             cond_node = Parser.parseBoolExpression()
-            if Parser.lex.next.kind != "CLOSE_PAR":
-                raise Exception("Esperado ')' após condição.")
-            Parser.lex.select_next()
             body_node = Parser.parse_block()
             return While("WHILE", [cond_node, body_node])  
         
