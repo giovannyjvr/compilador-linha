@@ -41,6 +41,7 @@ class Lexer:
                           "else": "ELSE",
                           "for": "WHILE",
                           "Scanln": "READ",
+                          
                           }
             
             idnt = self.source[self.position]
@@ -52,8 +53,29 @@ class Lexer:
             identificador = idnt
             if identificador in reservadas:
                 self.next = Token(reservadas[identificador], identificador)
+            elif identificador == "true":
+                self.next = Token("BOOL", 1)
+            elif identificador == "false":
+                self.next = Token("BOOL", 0)
+            elif identificador in ("int", "string", "bool"):
+                self.next = Token("TYPE", identificador)
+            elif identificador == "var":
+                self.next = Token("VAR", identificador)
             else:
                 self.next = Token("IDEN", identificador)
+        
+        
+        elif self.source[self.position] == "\"":
+            self.position += 1
+            string_val = ""
+            while self.position < len(self.source) and self.source[self.position] != "\"":
+                string_val += self.source[self.position]
+                self.position += 1
+            if self.position < len(self.source) and self.source[self.position] == "\"":
+                self.position += 1  # Pula a aspa de fechamento
+                self.next = Token("STR", string_val)
+            else:
+                raise Exception("String não fechada")
 
         elif self.source[self.position].isdigit():
             numero = self.source[self.position]
@@ -134,27 +156,38 @@ class Lexer:
             self.next = Token("GT", ">")
             self.position += 1
         
-        
-        
         else:
             raise Exception(f"Caracter inválido: {self.source[self.position]}")
         
 class Variable:
-    def __init__(self, value: int):
+    def __init__(self, value: int, type: str):
         self.value = value
+        self.type = type            
 
 class SymbolTable:
     def __init__(self):
         self._table: dict[str, Variable] = {}
 
+    # cria uma variável na tabela
+    def create_variable(self, name: str, var: Variable):
+        if name in self._table.keys():
+            raise Exception(f"Variável '{name}' já declarada.")
+        self._table[name] = var
+
     def table(self):
         """Getter: retorna o dicionário de variáveis."""
         return self._table
 
+    # atualiza o valor de uma variável na tabela
     def set(self, name: str, var: Variable):
-        """Setter: adiciona uma variável à tabela."""
+        """Setter: atualiza o valor de uma variável na tabela."""
+        if name not in self._table.keys():
+            raise Exception(f"Variável '{name}' não declarada.")
+        if self._table[name].type != var.type:
+            raise Exception(f"Tipo incompatível para variável '{name}'. Esperado '{self._table[name].type}', recebido '{var.type}'.")
         self._table[name] = var
 
+#   get uma variável da tabela
     def get(self, name: str) -> Variable | None:
         """Getter: retorna uma variável da tabela."""
         return self._table.get(name)
@@ -173,27 +206,69 @@ class BinOp(Node):
         
 
     def evaluate(self, st: SymbolTable):
-        left_val = self.children[0].evaluate(st)
-        right_val = self.children[1].evaluate(st)
+        l = self.children[0].evaluate(st)
+        r = self.children[1].evaluate(st)
+        left_val_type, left_val = l.type, l.value
+        right_val_type, right_val = r.type, r.value
+
+        def to_str(val,type):
+            if type == "bool":
+                return "true" if val != 0 else "false"
+            return str(val)
+        
 
         if self.value == "PLUS":
-            return left_val + right_val
+            if left_val_type == "string" or right_val_type == "string":
+                return Variable(to_str(left_val,left_val_type) + to_str(right_val,right_val_type), "string")
+            if left_val_type == right_val_type == "int":
+                return Variable(left_val + right_val, "int")
+            raise Exception(f"Operação '+' inválida entre '{left_val_type}' e '{right_val_type}'")
+
         elif self.value == "MINUS":
-            return left_val - right_val
+            if left_val_type == right_val_type == "int":
+                return Variable(left_val - right_val, "int")
+            raise Exception(f"Operação '-' inválida entre '{left_val_type}' e '{right_val_type}'")
+            
         elif self.value == "MULT":
-            return left_val * right_val
+            if left_val_type == right_val_type == "int":
+                return Variable(left_val * right_val, "int")
+            raise Exception(f"Operação '*' inválida entre '{left_val_type}' e '{right_val_type}'")
+        
         elif self.value == "DIV":
-            return left_val // right_val
+            if left_val_type == right_val_type == "int":
+                if right_val == 0:
+                    raise Exception("Divisão por zero.")
+                return Variable(left_val // right_val, "int")
+            raise Exception(f"Operação '/' inválida entre '{left_val_type}' e '{right_val_type}'")
+
         elif self.value == "EQUAL":
-            return 1 if left_val == right_val else 0
+            if left_val_type != right_val_type:
+                raise Exception(f"Operação '==' inválida entre '{left_val_type}' e '{right_val_type}'")
+            return Variable(1 if left_val == right_val else 0, "bool")
+
         elif self.value == "LT":
-            return 1 if left_val < right_val else 0
+            if left_val_type == right_val_type == "int":
+                return Variable(1 if left_val < right_val else 0, "bool")
+            if left_val_type == right_val_type == "string":
+                return Variable(1 if str(left_val) < str(right_val) else 0, "bool")
+            raise Exception(f"Operação '<' inválida entre '{left_val_type}' e '{right_val_type}'")
+
         elif self.value == "GT":   
-            return 1 if left_val > right_val else 0
+            if left_val_type == right_val_type == "int":
+                return Variable(1 if left_val > right_val else 0, "bool")
+            if left_val_type == right_val_type == "string":
+                return Variable(1 if str(left_val) > str(right_val) else 0, "bool")
+            raise Exception(f"Operação '>' inválida entre '{left_val_type}' e '{right_val_type}'")
+
         elif self.value == "AND":
-            return 1 if (left_val != 0 and right_val != 0) else 0
+            if left_val_type == right_val_type == "bool":
+                return Variable(1 if (left_val != 0 and right_val != 0) else 0, "bool")
+            raise Exception(f"Operação '&&' inválida entre '{left_val_type}' e '{right_val_type}'")
+
         elif self.value == "OR":
-            return 1 if (left_val != 0 or right_val != 0) else 0
+            if left_val_type == right_val_type == "bool":
+                return Variable(1 if (left_val != 0 or right_val != 0) else 0, "bool")
+            raise Exception(f"Operação '||' inválida entre '{left_val_type}' e '{right_val_type}'")
         else:
             raise Exception(f"Operador binário desconhecido: {self.value}")
 
@@ -204,17 +279,18 @@ class UnOp(Node):
         val = self.children[0].evaluate(st)
 
         if self.value == "PLUS":
-            return val
+            return Variable(val.value, "int")
         elif self.value == "MINUS":
-            return -val
+            return Variable(-val.value, "int")
         elif self.value == "NOT":
-            return 1 if val == 0 else 0
+            return Variable( 0 if val.value else 1, "bool")
         else:
             raise Exception(f"Operador unário desconhecido: {self.value}")
 
 class IntVal(Node):
     def evaluate(self, st: SymbolTable):
-        return self.value
+        return Variable(self.value, "int")
+    
 
 class NoOp(Node):
     def evaluate(self, st):
@@ -222,7 +298,7 @@ class NoOp(Node):
 
 class Assignment(Node):
     def evaluate(self, st: SymbolTable):
-        st.set(self.children[0].value, Variable(self.children[1].evaluate(st)))
+        st.set(self.children[0].value, self.children[1].evaluate(st).value, self.children[1].evaluate(st).type)
 
 class Identifier(Node):
     def evaluate(self, st: SymbolTable):
@@ -230,6 +306,44 @@ class Identifier(Node):
         if var is None:
             raise Exception(f"Variável não definida: {self.value}")
         return var.value
+
+class BoolVal(Node):
+    def evaluate(self, st: SymbolTable):
+        return Variable(1 if self.value else 0, "bool")
+
+class StringVal(Node):
+    def evaluate(self, st: SymbolTable):
+        return Variable(self.value, "string")
+    
+class VarDec(Node):
+    def evaluate(self, st):
+        var_name = self.children[0].value
+        dec_type = self.value
+
+        if dec_type not in ("int", "string", "bool"):
+            raise Exception(f"Tipo de variável desconhecido: {dec_type}")
+        
+        if len(self.children) == 2:
+            filho = self.children[1].evaluate(st)
+            filho_type = filho.type
+            filho_value = filho.value
+
+            if dec_type != filho.type:
+                raise Exception(f"Tipo incompatível na inicialização da variável '{var_name}'. Esperado '{dec_type}', recebido '{filho_type}'.")
+            
+            else:
+                st.create_variable(var_name, dec_type)
+                st.set(var_name, filho.value, dec_type)
+                return Variable(filho.value, filho.type)
+            
+        defaults = {
+            "String": "",
+            "int": 0,
+            "bool": 0  # false
+        }
+        st.create_variable(var_name, dec_type)
+        st.set(var_name, defaults[dec_type], dec_type)
+        return Variable(defaults[dec_type], dec_type)
 
 class Block(Node):
     def evaluate(self, st: SymbolTable):
@@ -239,16 +353,30 @@ class Block(Node):
 class Print(Node):
     def evaluate(self, st: SymbolTable):
         value = self.children[0].evaluate(st)
-        print(value)
+        if value.type == "bool":
+            print ("true" if value.value != 0 else "false")
+        else:
+            print(value.value)
 
 class While(Node):
     def evaluate(self, st: SymbolTable):
+        condicao = self.children[0].evaluate(st)
+        if condicao.type != "bool":
+            raise Exception("Condição do 'while' deve ser do tipo bool.")
+        
         while self.children[0].evaluate(st) != 0: # 0 é falso
             self.children[1].evaluate(st)
+            condicao = self.children[0].evaluate(st)
+            if condicao.type != "bool":
+                raise Exception("Condição do 'while' deve ser do tipo bool.")
 
 class If(Node):
     def evaluate(self, st: SymbolTable):
-        if self.children[0].evaluate(st) != 0: # 0 é falso
+        condicao = self.children[0].evaluate(st)
+        if condicao.type != "bool":
+            raise Exception("Condição do 'if' deve ser do tipo bool.")
+        
+        if condicao != 0: # 0 é falso
             self.children[1].evaluate(st)
         elif len(self.children) == 3: # existe o bloco else
             self.children[2].evaluate(st)
@@ -256,7 +384,7 @@ class If(Node):
 class Read(Node):
     def evaluate(self, st: SymbolTable):
         value = int(input())
-        return value   
+        return Variable(value, "int")
     
 
 
@@ -319,6 +447,29 @@ class Parser:
                 else_node = Parser.parse_statement()
                 return If("IF", [cond_node, then_node, else_node])
             return If("IF", [cond_node, then_node])
+
+        elif Parser.lex.next.kind == "VAR":
+            Parser.lex.select_next()
+            if Parser.lex.next.kind != "IDEN":
+                raise Exception("Esperado identificador após 'var'.")
+            id_node = Identifier(Parser.lex.next.value, [])
+            Parser.lex.select_next()
+            if Parser.lex.next.kind != "TYPE":
+                raise Exception("Esperado tipo após identificador.")
+            type_node = Parser.lex.next.value
+            Parser.lex.select_next()
+            if Parser.lex.next.kind == "ASSIGN":
+                Parser.lex.select_next()
+                expr_node = Parser.parseBoolExpression()
+                if Parser.lex.next.kind != "END":
+                    raise Exception("Esperado fim de linha após expressão.")
+                Parser.lex.select_next()
+                return VarDec(type_node, [id_node, expr_node])
+            elif Parser.lex.next.kind == "END":
+                Parser.lex.select_next()
+                return VarDec(type_node, [id_node])
+            else:
+                raise Exception("Esperado '=' ou fim de linha após tipo.")
         
         elif Parser.lex.next.kind == "WHILE":
             Parser.lex.select_next()
