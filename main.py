@@ -160,38 +160,44 @@ class Lexer:
             raise Exception(f"Caracter inválido: {self.source[self.position]}")
         
 class Variable:
-    def __init__(self, value: int, type: str):
+    def __init__(self, value: int|str|bool, type: str):
         self.value = value
         self.type = type            
 
 class SymbolTable:
-    def __init__(self):
-        self._table: dict[str, Variable] = {}
+    def __init__(self,table: dict[str, Variable]):
+        self.table = table
 
     # cria uma variável na tabela
     def create_variable(self, name: str, var: Variable):
-        if name in self._table.keys():
+        if name in self.table.keys():
             raise Exception(f"Variável '{name}' já declarada.")
-        self._table[name] = var
+        self.table[name] = var
 
+    def set(self, var: str, value: int|str|bool, type: str):
+        if var not in self.table.keys():
+            raise Exception(f"Erro: variável '{var}' não declarada")
+        if self.table[var].type != type:
+            raise Exception(f"Erro: tipo incorreto para variável '{var}'. Esperado '{self.table[var].type}', recebido '{type}'")
+        self.table[var] = Variable(value, self.table[var].type)
+        
+    def getter(self, var: str):
+        if var not in self.table.keys():
+            raise Exception(f"Erro: variável '{var}' não declarada")
+        return Variable(self.table[var].value, self.table[var].type)
+   
     def table(self):
         """Getter: retorna o dicionário de variáveis."""
-        return self._table
+        return self.table
 
-    # atualiza o valor de uma variável na tabela
-    def set(self, name: str, var: Variable):
-        """Setter: atualiza o valor de uma variável na tabela."""
-        if name not in self._table.keys():
-            raise Exception(f"Variável '{name}' não declarada.")
-        if self._table[name].type != var.type:
-            raise Exception(f"Tipo incompatível para variável '{name}'. Esperado '{self._table[name].type}', recebido '{var.type}'.")
-        self._table[name] = var
+
 
 #   get uma variável da tabela
     def get(self, name: str) -> Variable | None:
+        if name not in self.table.keys():
+            raise Exception(f"Variável '{name}' não declarada.")
         """Getter: retorna uma variável da tabela."""
-        return self._table.get(name)
-
+        return Variable(self.table[name].value, self.table[name].type)
 
 class Node:
     def __init__(self, value, children: list):
@@ -298,14 +304,13 @@ class NoOp(Node):
 
 class Assignment(Node):
     def evaluate(self, st: SymbolTable):
-        st.set(self.children[0].value, self.children[1].evaluate(st).value, self.children[1].evaluate(st).type)
+        var_name = self.children[0].value
+        var_value = self.children[1].evaluate(st)   # var_value é Variable
+        st.set(var_name, var_value.value, var_value.type)  # << AQUI
 
 class Identifier(Node):
     def evaluate(self, st: SymbolTable):
-        var = st.get(self.value)
-        if var is None:
-            raise Exception(f"Variável não definida: {self.value}")
-        return var.value
+        return st.get(self.value)
 
 class BoolVal(Node):
     def evaluate(self, st: SymbolTable):
@@ -318,32 +323,29 @@ class StringVal(Node):
 class VarDec(Node):
     def evaluate(self, st):
         var_name = self.children[0].value
-        dec_type = self.value
-
+        dec_type = self.value  # "int" | "string" | "bool"
+    
         if dec_type not in ("int", "string", "bool"):
             raise Exception(f"Tipo de variável desconhecido: {dec_type}")
-        
-        if len(self.children) == 2:
-            filho = self.children[1].evaluate(st)
-            filho_type = filho.type
-            filho_value = filho.value
 
-            if dec_type != filho.type:
-                raise Exception(f"Tipo incompatível na inicialização da variável '{var_name}'. Esperado '{dec_type}', recebido '{filho_type}'.")
-            
-            else:
-                st.create_variable(var_name, dec_type)
-                st.set(var_name, filho.value, dec_type)
-                return Variable(filho.value, filho.type)
-            
-        defaults = {
-            "String": "",
-            "int": 0,
-            "bool": 0  # false
-        }
-        st.create_variable(var_name, dec_type)
-        st.set(var_name, defaults[dec_type], dec_type)
-        return Variable(defaults[dec_type], dec_type)
+        defaults = {"int": 0, "string": "", "bool": 0}
+
+        if len(self.children) == 2:
+            rhs = self.children[1].evaluate(st)  # rhs é um Variable
+            if rhs.type != dec_type:
+                raise Exception(
+                    f"Tipo incompatível na inicialização da variável '{var_name}'. "
+                    f"Esperado '{dec_type}', recebido '{rhs.type}'."
+                )
+            st.create_variable(var_name, Variable(rhs.value, dec_type))
+            # opcional: já retorna a variável criada
+            return Variable(rhs.value, dec_type)
+
+        # sem inicialização
+        dv = defaults[dec_type]
+        st.create_variable(var_name, Variable(dv, dec_type))
+        return Variable(dv, dec_type)
+
 
 class Block(Node):
     def evaluate(self, st: SymbolTable):
@@ -364,11 +366,10 @@ class While(Node):
         if condicao.type != "bool":
             raise Exception("Condição do 'while' deve ser do tipo bool.")
         
-        while self.children[0].evaluate(st) != 0: # 0 é falso
+        while self.children[0].evaluate(st).value != 0: # 0 é falso
             self.children[1].evaluate(st)
-            condicao = self.children[0].evaluate(st)
-            if condicao.type != "bool":
-                raise Exception("Condição do 'while' deve ser do tipo bool.")
+            
+            
 
 class If(Node):
     def evaluate(self, st: SymbolTable):
@@ -561,6 +562,14 @@ class Parser:
                 raise Exception("Faltando )")
             Parser.lex.select_next()
             return node
+        elif Parser.lex.next.kind == "BOOL":
+            node = BoolVal(Parser.lex.next.value,[])
+            Parser.lex.select_next()
+            return node
+        elif Parser.lex.next.kind == "STR":
+            node = StringVal(Parser.lex.next.value,[])
+            Parser.lex.select_next()
+            return node
         
         elif Parser.lex.next.kind == "READ":
             Parser.lex.select_next()
@@ -613,6 +622,7 @@ if __name__ == "__main__":
     filename = sys.argv[1]
     with open(filename, "r", encoding="utf-8") as f:
         code = f.read()
+    code = Prepro.filter(code)
     root = Parser.run(code)
-    st = SymbolTable()
+    st = SymbolTable({})
     root.evaluate(st)
