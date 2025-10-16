@@ -1,5 +1,8 @@
 import sys
 import re
+class LexerError(Exception): pass
+class ParserError(Exception): pass
+class SemanticError(Exception): pass
 
 class Token:
     def __init__(self, kind : str, value: str| int):
@@ -127,14 +130,14 @@ class Lexer:
                 self.next = Token("AND", "&&")
                 self.position += 2
             else:
-                raise Exception(f"Caracter inválido: {self.source[self.position]}")
+                raise LexerError(f"Caracter inválido: {self.source[self.position]}")
             
         elif self.source[self.position] == "|":
             if self.position + 1 < len(self.source) and self.source[self.position + 1] == "|":
                 self.next = Token("OR", "||")
                 self.position += 2
             else:
-                raise Exception(f"Caracter inválido: {self.source[self.position]}")
+                raise LexerError(f"Caracter inválido: {self.source[self.position]}")
             
         elif self.source[self.position] == "!":
             self.next = Token("NOT", "!")
@@ -157,7 +160,7 @@ class Lexer:
             self.position += 1
         
         else:
-            raise Exception(f"Caracter inválido: {self.source[self.position]}")
+            raise LexerError(f"Caracter inválido: {self.source[self.position]}")
         
 class Variable:
     def __init__(self, value: int|str|bool, type: str):
@@ -171,19 +174,19 @@ class SymbolTable:
     # cria uma variável na tabela
     def create_variable(self, name: str, var: Variable):
         if name in self.table.keys():
-            raise Exception(f"Variável '{name}' já declarada.")
+            raise SemanticError(f"Variável '{name}' já declarada.")
         self.table[name] = var
 
     def set(self, var: str, value: int|str|bool, type: str):
         if var not in self.table.keys():
-            raise Exception(f"Erro: variável '{var}' não declarada")
+            raise SemanticError(f"Erro: variável '{var}' não declarada")
         if self.table[var].type != type:
-            raise Exception(f"Erro: tipo incorreto para variável '{var}'. Esperado '{self.table[var].type}', recebido '{type}'")
+            raise SemanticError(f"Erro: tipo incorreto para variável '{var}'. Esperado '{self.table[var].type}', recebido '{type}'")
         self.table[var] = Variable(value, self.table[var].type)
         
     def getter(self, var: str):
         if var not in self.table.keys():
-            raise Exception(f"Erro: variável '{var}' não declarada")
+            raise SemanticError(f"Erro: variável '{var}' não declarada")
         return Variable(self.table[var].value, self.table[var].type)
    
     def table(self):
@@ -195,7 +198,7 @@ class SymbolTable:
 #   get uma variável da tabela
     def get(self, name: str) -> Variable | None:
         if name not in self.table.keys():
-            raise Exception(f"Variável '{name}' não declarada.")
+            raise SemanticError(f"Variável '{name}' não declarada.")
         """Getter: retorna uma variável da tabela."""
         return Variable(self.table[name].value, self.table[name].type)
 
@@ -210,7 +213,6 @@ class Node:
 
 class BinOp(Node):
         
-
     def evaluate(self, st: SymbolTable):
         l = self.children[0].evaluate(st)
         r = self.children[1].evaluate(st)
@@ -228,28 +230,28 @@ class BinOp(Node):
                 return Variable(to_str(left_val,left_val_type) + to_str(right_val,right_val_type), "string")
             if left_val_type == right_val_type == "int":
                 return Variable(left_val + right_val, "int")
-            raise Exception(f"Operação '+' inválida entre '{left_val_type}' e '{right_val_type}'")
+            raise SemanticError(f"Operação '+' inválida entre '{left_val_type}' e '{right_val_type}'")
 
         elif self.value == "MINUS":
             if left_val_type == right_val_type == "int":
                 return Variable(left_val - right_val, "int")
-            raise Exception(f"Operação '-' inválida entre '{left_val_type}' e '{right_val_type}'")
-            
+            raise SemanticError(f"Operação '-' inválida entre '{left_val_type}' e '{right_val_type}'")
+
         elif self.value == "MULT":
             if left_val_type == right_val_type == "int":
                 return Variable(left_val * right_val, "int")
-            raise Exception(f"Operação '*' inválida entre '{left_val_type}' e '{right_val_type}'")
-        
+            raise SemanticError(f"Operação '*' inválida entre '{left_val_type}' e '{right_val_type}'")
+
         elif self.value == "DIV":
             if left_val_type == right_val_type == "int":
                 if right_val == 0:
-                    raise Exception("Divisão por zero.")
+                    raise SemanticError("Divisão por zero.")
                 return Variable(left_val // right_val, "int")
-            raise Exception(f"Operação '/' inválida entre '{left_val_type}' e '{right_val_type}'")
+            raise SemanticError(f"Operação '/' inválida entre '{left_val_type}' e '{right_val_type}'")
 
         elif self.value == "EQUAL":
             if left_val_type != right_val_type:
-                raise Exception(f"Operação '==' inválida entre '{left_val_type}' e '{right_val_type}'")
+                raise SemanticError(f"Operação '==' inválida entre '{left_val_type}' e '{right_val_type}'")
             return Variable(1 if left_val == right_val else 0, "bool")
 
         elif self.value == "LT":
@@ -257,26 +259,26 @@ class BinOp(Node):
                 return Variable(1 if left_val < right_val else 0, "bool")
             if left_val_type == right_val_type == "string":
                 return Variable(1 if str(left_val) < str(right_val) else 0, "bool")
-            raise Exception(f"Operação '<' inválida entre '{left_val_type}' e '{right_val_type}'")
+            raise SemanticError(f"Operação '<' inválida entre '{left_val_type}' e '{right_val_type}'")
 
         elif self.value == "GT":   
             if left_val_type == right_val_type == "int":
                 return Variable(1 if left_val > right_val else 0, "bool")
             if left_val_type == right_val_type == "string":
                 return Variable(1 if str(left_val) > str(right_val) else 0, "bool")
-            raise Exception(f"Operação '>' inválida entre '{left_val_type}' e '{right_val_type}'")
+            raise SemanticError(f"Operação '>' inválida entre '{left_val_type}' e '{right_val_type}'")
 
         elif self.value == "AND":
             if left_val_type == right_val_type == "bool":
                 return Variable(1 if (left_val != 0 and right_val != 0) else 0, "bool")
-            raise Exception(f"Operação '&&' inválida entre '{left_val_type}' e '{right_val_type}'")
+            raise SemanticError(f"Operação '&&' inválida entre '{left_val_type}' e '{right_val_type}'")
 
         elif self.value == "OR":
             if left_val_type == right_val_type == "bool":
                 return Variable(1 if (left_val != 0 or right_val != 0) else 0, "bool")
-            raise Exception(f"Operação '||' inválida entre '{left_val_type}' e '{right_val_type}'")
+            raise SemanticError(f"Operação '||' inválida entre '{left_val_type}' e '{right_val_type}'")
         else:
-            raise Exception(f"Operador binário desconhecido: {self.value}")
+            raise SemanticError(f"Operador binário desconhecido: {self.value}")
 
 
 class UnOp(Node):
@@ -285,13 +287,19 @@ class UnOp(Node):
         val = self.children[0].evaluate(st)
 
         if self.value == "PLUS":
+            if val.type != "int":
+                raise SemanticError(f"Operação unária '+' inválida para '{val.type}'")
             return Variable(val.value, "int")
         elif self.value == "MINUS":
+            if val.type != "int":
+                raise SemanticError(f"Operação unária '-' inválida para '{val.type}'")
             return Variable(-val.value, "int")
         elif self.value == "NOT":
-            return Variable( 0 if val.value else 1, "bool")
+            if val.type != "bool":
+                raise SemanticError(f"Operação unária '!' inválida para '{val.type}'")
+            return Variable(0 if val.value else 1, "bool")
         else:
-            raise Exception(f"Operador unário desconhecido: {self.value}")
+            raise SemanticError(f"Operador unário desconhecido: {self.value}")
 
 class IntVal(Node):
     def evaluate(self, st: SymbolTable):
@@ -326,14 +334,14 @@ class VarDec(Node):
         dec_type = self.value  # "int" | "string" | "bool"
     
         if dec_type not in ("int", "string", "bool"):
-            raise Exception(f"Tipo de variável desconhecido: {dec_type}")
+            raise SemanticError(f"Tipo de variável desconhecido: {dec_type}")
 
         defaults = {"int": 0, "string": "", "bool": 0}
 
         if len(self.children) == 2:
             rhs = self.children[1].evaluate(st)  # rhs é um Variable
             if rhs.type != dec_type:
-                raise Exception(
+                raise SemanticError(
                     f"Tipo incompatível na inicialização da variável '{var_name}'. "
                     f"Esperado '{dec_type}', recebido '{rhs.type}'."
                 )
@@ -364,7 +372,7 @@ class While(Node):
     def evaluate(self, st: SymbolTable):
         condicao = self.children[0].evaluate(st)
         if condicao.type != "bool":
-            raise Exception("Condição do 'while' deve ser do tipo bool.")
+            raise SemanticError("Condição do 'while' deve ser do tipo bool.")
         
         while self.children[0].evaluate(st).value != 0: # 0 é falso
             self.children[1].evaluate(st)
@@ -375,7 +383,7 @@ class If(Node):
     def evaluate(self, st: SymbolTable):
         condicao = self.children[0].evaluate(st)
         if condicao.type != "bool":
-            raise Exception("Condição do 'if' deve ser do tipo bool.")
+            raise SemanticError("Condição do 'if' deve ser do tipo bool.")
         
         if condicao != 0: # 0 é falso
             self.children[1].evaluate(st)
@@ -406,13 +414,13 @@ class Parser:
                 children.append(node)
             if Parser.lex.next.kind == "CLOSE_BRA":
                 if len(children) == 0:
-                    raise Exception("Erro: bloco vazio não é permitido")
+                    raise ParserError("Erro: bloco vazio não é permitido")
                 Parser.lex.select_next() # Avança para o próximo token
                 return Block("BLOCK", children)
             else:
-                raise Exception("Erro: esperado '}' no final do bloco")
+                raise ParserError("Erro: esperado '}' no final do bloco")
         else:
-            raise Exception("Erro: esperado '{' no início do bloco")
+            raise ParserError("Erro: esperado '{' no início do bloco")
     
 
 
@@ -426,11 +434,11 @@ class Parser:
             id_node = Identifier(Parser.lex.next.value, [])
             Parser.lex.select_next()
             if Parser.lex.next.kind != "ASSIGN":
-                raise Exception("Esperado '=' após identificador.")
+                raise ParserError("Esperado '=' após identificador.")
             Parser.lex.select_next()
             expr_node = Parser.parseBoolExpression()
             if Parser.lex.next.kind != "END":
-                raise Exception("Esperado fim de linha após expressão.")
+                raise ParserError("Esperado fim de linha após expressão.")
             Parser.lex.select_next()
             return Assignment("ASSIGN", [id_node, expr_node])
         
@@ -438,13 +446,13 @@ class Parser:
             Parser.lex.select_next()
             cond_node = Parser.parseBoolExpression()
             if Parser.lex.next.kind == "END":
-                raise Exception("Unexpected token NEWLINE")
+                raise ParserError("Unexpected token NEWLINE")
             then_node = Parser.parse_statement()
             else_node = None
             if Parser.lex.next.kind == "ELSE":
                 Parser.lex.select_next()
                 if Parser.lex.next.kind == "END":
-                    raise Exception("Unexpected token NEWLINE")
+                    raise ParserError("Unexpected token NEWLINE")
                 else_node = Parser.parse_statement()
                 return If("IF", [cond_node, then_node, else_node])
             return If("IF", [cond_node, then_node])
@@ -452,12 +460,12 @@ class Parser:
         elif Parser.lex.next.kind == "VAR":
             Parser.lex.select_next()
             if Parser.lex.next.kind != "IDEN":
-                raise Exception("Esperado identificador após 'var'.")
+                raise ParserError("Esperado identificador após 'var'.")
             id_node = Identifier(Parser.lex.next.value, [])
 
             Parser.lex.select_next()
             if Parser.lex.next.kind != "TYPE":
-                raise Exception("Esperado tipo após identificador.")
+                raise ParserError("Esperado tipo após identificador.")
             
             type_node = Parser.lex.next.value
             Parser.lex.select_next()
@@ -469,7 +477,7 @@ class Parser:
                 
             
             if Parser.lex.next.kind != "END":
-                raise Exception("Esperado fim de linha após declaração.")
+                raise ParserError("Esperado fim de linha após declaração.")
             Parser.lex.select_next()
             return VarDec(type_node, [id_node] + ([expr_node] if expr_node else []))
         
@@ -477,21 +485,21 @@ class Parser:
             Parser.lex.select_next()
             cond_node = Parser.parseBoolExpression()
             if Parser.lex.next.kind == "END":
-                raise Exception("Unexpected token NEWLINE")
+                raise ParserError("Unexpected token NEWLINE")
             body_node = Parser.parse_block()
             return While("WHILE", [cond_node, body_node])  
         
         elif Parser.lex.next.kind == "PRINT":
             Parser.lex.select_next()
             if Parser.lex.next.kind != "OPEN_PAR":
-                raise Exception("Esperado '(' após 'Println'.")
+                raise ParserError("Esperado '(' após 'Println'.")
             Parser.lex.select_next()
             expr_node = Parser.parseBoolExpression()
             if Parser.lex.next.kind != "CLOSE_PAR":
-                raise Exception("Esperado ')' após expressão.")
+                raise ParserError("Esperado ')' após expressão.")
             Parser.lex.select_next()
             if Parser.lex.next.kind != "END":
-                raise Exception("Esperado fim de linha após expressão.")
+                raise ParserError("Esperado fim de linha após expressão.")
             Parser.lex.select_next()
             return Print("PRINT", [expr_node])
         
@@ -499,7 +507,7 @@ class Parser:
             return Parser.parse_block()
         
         else:
-            raise Exception(f"Token inesperado: {Parser.lex.next.kind}")
+            raise ParserError(f"Token inesperado: {Parser.lex.next.kind}")
         
 
     def parseBoolExpression() -> int:
@@ -560,7 +568,7 @@ class Parser:
             Parser.lex.select_next()
             node = Parser.parseBoolExpression()
             if Parser.lex.next.kind != "CLOSE_PAR":
-                raise Exception("Faltando )")
+                raise ParserError("Faltando )")
             Parser.lex.select_next()
             return node
         elif Parser.lex.next.kind == "BOOL":
@@ -575,10 +583,10 @@ class Parser:
         elif Parser.lex.next.kind == "READ":
             Parser.lex.select_next()
             if Parser.lex.next.kind != "OPEN_PAR":
-                raise Exception("Esperado '(' após 'Scanln'.")
+                raise ParserError("Esperado '(' após 'Scanln'.")
             Parser.lex.select_next()
             if Parser.lex.next.kind != "CLOSE_PAR":
-                raise Exception("Esperado ')' após 'Scanln('.")
+                raise ParserError("Esperado ')' após 'Scanln('.")
             Parser.lex.select_next()
             return Read("READ", [])
         
@@ -598,9 +606,9 @@ class Parser:
             node = Identifier(Parser.lex.next.value, [])
             Parser.lex.select_next()
             return node
-        
+
         else:
-            raise Exception(f"Erro: token inesperado '{Parser.lex.next.kind}'")
+            raise ParserError(f"Erro: token inesperado '{Parser.lex.next.kind}'")
         
 
     @staticmethod
@@ -613,7 +621,7 @@ class Parser:
         Parser.lex.select_next()
         ast = Parser.parse_program()
         if Parser.lex.next.kind != "EOF":
-            raise Exception("Tokens remanescentes após o fim do programa.")
+            raise ParserError("Tokens remanescentes após o fim do programa.")
         return ast
     
 if __name__ == "__main__":
