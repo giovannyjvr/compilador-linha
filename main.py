@@ -368,7 +368,7 @@ class While(Node):
         
         while self.children[0].evaluate(st).value != 0: # 0 é falso
             self.children[1].evaluate(st)
-            
+
             
 
 class If(Node):
@@ -454,23 +454,24 @@ class Parser:
             if Parser.lex.next.kind != "IDEN":
                 raise Exception("Esperado identificador após 'var'.")
             id_node = Identifier(Parser.lex.next.value, [])
+
             Parser.lex.select_next()
             if Parser.lex.next.kind != "TYPE":
                 raise Exception("Esperado tipo após identificador.")
+            
             type_node = Parser.lex.next.value
             Parser.lex.select_next()
+            
+            expr_node = None
             if Parser.lex.next.kind == "ASSIGN":
                 Parser.lex.select_next()
                 expr_node = Parser.parseBoolExpression()
-                if Parser.lex.next.kind != "END":
-                    raise Exception("Esperado fim de linha após expressão.")
-                Parser.lex.select_next()
-                return VarDec(type_node, [id_node, expr_node])
-            elif Parser.lex.next.kind == "END":
-                Parser.lex.select_next()
-                return VarDec(type_node, [id_node])
-            else:
-                raise Exception("Esperado '=' ou fim de linha após tipo.")
+                
+            
+            if Parser.lex.next.kind != "END":
+                raise Exception("Esperado fim de linha após declaração.")
+            Parser.lex.select_next()
+            return VarDec(type_node, [id_node] + ([expr_node] if expr_node else []))
         
         elif Parser.lex.next.kind == "WHILE":
             Parser.lex.select_next()
