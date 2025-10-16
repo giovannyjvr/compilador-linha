@@ -461,7 +461,7 @@ class Parser:
             
             type_node = Parser.lex.next.value
             Parser.lex.select_next()
-            
+
             expr_node = None
             if Parser.lex.next.kind == "ASSIGN":
                 Parser.lex.select_next()
@@ -600,7 +600,7 @@ class Parser:
             return node
         
         else:
-            raise Exception("Fator inválido")
+            raise Exception(f"Erro: token inesperado '{Parser.lex.next.kind}'")
         
 
     @staticmethod
