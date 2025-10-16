@@ -12,13 +12,12 @@ class Token:
 class Prepro:
     @staticmethod
     def filter(code: str) -> str:
-        """
-        Remove comentários inline: tudo entre '//' e fim da linha,
-        preservando a quebra de linha.
-        """
-        # cobre \n (Unix) e \r\n (Windows) sem consumir a quebra
-        return re.sub(r'//.*?(?=\r?\n|$)', '', code)
-        
+        code = re.sub(r'//.*?(?=\r?\n|$)', '', code)
+        code = code.replace('\r\n', '\n').replace('\r', '\n')
+        if not code.endswith('\n'):
+            code += '\n'
+        return code
+
 
 
 class Lexer:
@@ -78,7 +77,7 @@ class Lexer:
                 self.position += 1  # Pula a aspa de fechamento
                 self.next = Token("STR", string_val)
             else:
-                raise Exception("String não fechada")
+                raise LexerError("String não fechada")
 
         elif self.source[self.position].isdigit():
             numero = self.source[self.position]
@@ -398,6 +397,7 @@ class Read(Node):
 
 
 
+
 class Parser:
     def parse_program() -> Block:
         statements = []
@@ -628,10 +628,42 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Uso: python3 main.py teste.go")
         sys.exit(1)
+
     filename = sys.argv[1]
-    with open(filename, "r", encoding="utf-8") as f:
-        code = f.read()
-    code = Prepro.filter(code)
-    root = Parser.run(code)
-    st = SymbolTable({})
-    root.evaluate(st)
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            code = f.read()
+
+        # mantém seu filtro (pode incluir o '\n' final se quiser)
+        code = Prepro.filter(code)
+
+        # --- fase de PARSE ---
+        try:
+            root = Parser.run(code)
+        except LexerError as e:
+            print(f"[Lexer] {e}")
+            sys.exit(1)
+        except ParserError as e:
+            print(f"[Parser] {e}")
+            sys.exit(1)
+        except Exception as e:
+            # qualquer outra exceção durante parsing: trate como Parser
+            print(f"[Parser] {e}")
+            sys.exit(1)
+
+        # --- fase SEMÂNTICA/EXECUÇÃO ---
+        try:
+            st = SymbolTable({})
+            root.evaluate(st)
+        except SemanticError as e:
+            print(f"[Semantic] {e}")
+            sys.exit(1)
+        except Exception as e:
+            # exceções em evaluate() são semânticas por convenção aqui
+            print(f"[Semantic] {e}")
+            sys.exit(1)
+
+    except Exception as e:
+        # fallback de segurança (I/O etc.)
+        print(f"[Parser] {e}")
+        sys.exit(1)
