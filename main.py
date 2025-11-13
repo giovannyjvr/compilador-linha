@@ -1,75 +1,27 @@
 import sys
 import re
-class LexerError(Exception): pass
-class ParserError(Exception): pass
-class SemanticError(Exception): pass
+
+# =============================
+# Tokens e Pré-processamento
+# =============================
 
 class Token:
-    def __init__(self, kind : str, value: str| int):
-        self.kind = kind #tipo do token, INT PLUS MINUS EOF
-        self.value = value # valor do token "1 , 2 , 3 , 4 , + , -"
+    def __init__(self, kind: str, value: str | int):
+        self.kind = kind
+        self.value = value
 
 class Prepro:
     @staticmethod
     def filter(code: str) -> str:
-        code = re.sub(r'//.*?(?=\r?\n|$)', '', code)
-        code = code.replace('\r\n', '\n').replace('\r', '\n')
-        if not code.endswith('\n'):
-            code += '\n'
-        return code
+        """
+        Remove comentários inline: tudo entre '//' e fim da linha,
+        preservando a quebra de linha.
+        """
+        return re.sub(r'//.*?(?=\r?\n|$)', '', code)
 
-class Code:
-
-    instructions = []
-
-    def append(code: str) -> None:
-        Code.instructions.append(code)
-
-    def dump(filename: str) -> None:
-        with open(filename, 'w') as file:
-            # Escrever o cabeçalho: até início do código gerado
-            file.write("\n; CABEÇALHO DO ARQUIVO\n")
-            file.write(''' 
-                section .data
-                format_out: db "%d", 10, 0 ; format do printf
-                format_in: db "%d", 0 ; format do scanf
-                scan_int: dd 0; 32-bits integer
-
-                section .text
-
-                extern printf ; usar _printf para Windows
-                extern scanf ; usar _scanf para Windows
-                ; extern _ExitProcess@4 ; usar para Windows
-                global _start ; início do programa
-
-                _start:
-                push ebp ; guarda o EBP
-                mov ebp, esp ; zera a pilha        
-            ''')
-
-            file.write("\n; aqui começa o codigo gerado:\n")
-            # Escreve as instruções armazenadas
-            file.write("\n".join(Code.instructions))
-            file.write("\n; aqui termina o código gerado\n")
-
-            file.write("\n; aqui começam as instruções finais:\n")
-            # Escrever as instruções finais: após término do código gerado
-            file.write('''
-                mov esp, ebp ; reestabelece a pilha
-                pop ebp
-            ''')
-            file.write("\n; chamada da interrupcao de saida (Linux)\n")
-            file.write('''
-                mov eax, 1   
-                xor ebx, ebx 
-                int 0x80     
-                \n; Para Windows:\n
-                \n; push dword 0\n        
-                \n; call _ExitProcess@4
-            ''')
 
 class Lexer:
-    def __init__(self, source: str, position : int, next : Token):
+    def __init__(self, source: str, position: int, next: Token | None):
         self.source = source
         self.position = position
         self.next = next
@@ -78,237 +30,272 @@ class Lexer:
         if self.position >= len(self.source):
             self.next = Token("EOF", "")
             return
-        
+
+        # pular espaços em branco, tabs, \r
         while self.position < len(self.source) and self.source[self.position] in (" ", "\t", "\r"):
             self.position += 1
             if self.position >= len(self.source):
                 self.next = Token("EOF", "")
                 return
-            
-        if self.source[self.position].isalpha():
-            reservadas = {"Println": "PRINT",
-                          "if": "IF",
-                          "else": "ELSE",
-                          "for": "WHILE",
-                          "Scanln": "READ",
-                          
-                          }
-            
+
+        if self.position >= len(self.source):
+            self.next = Token("EOF", "")
+            return
+
+        ch = self.source[self.position]
+
+        # palavras reservadas / identificadores
+        if ch.isalpha() or ch == "_":
+            reservadas = {
+                "Println": "PRINT",
+                "if": "IF",
+                "else": "ELSE",
+                "for": "WHILE",
+                "Scanln": "READ",
+                "func": "FUNC",        # Roteiro 9
+                "return": "RETURN",    # Roteiro 9
+            }
+
             idnt = self.source[self.position]
             self.position += 1
             while self.position < len(self.source) and (self.source[self.position].isalnum() or self.source[self.position] == "_"):
                 idnt += self.source[self.position]
                 self.position += 1
 
-            identificador = idnt
-            if identificador in reservadas:
-                self.next = Token(reservadas[identificador], identificador)
-            elif identificador == "true":
+            if idnt in reservadas:
+                self.next = Token(reservadas[idnt], idnt)
+            elif idnt == "true":
                 self.next = Token("BOOL", 1)
-            elif identificador == "false":
+            elif idnt == "false":
                 self.next = Token("BOOL", 0)
-            elif identificador in ("int", "string", "bool"):
-                self.next = Token("TYPE", identificador)
-            elif identificador == "var":
-                self.next = Token("VAR", identificador)
+            elif idnt in ("int", "string", "bool"):
+                self.next = Token("TYPE", idnt)
+            elif idnt == "var":
+                self.next = Token("VAR", idnt)
             else:
-                self.next = Token("IDEN", identificador)
-        
-        
-        elif self.source[self.position] == "\"":
+                self.next = Token("IDEN", idnt)
+            return
+
+        # strings
+        if ch == "\"":
             self.position += 1
             string_val = ""
             while self.position < len(self.source) and self.source[self.position] != "\"":
                 string_val += self.source[self.position]
                 self.position += 1
             if self.position < len(self.source) and self.source[self.position] == "\"":
-                self.position += 1  # Pula a aspa de fechamento
+                self.position += 1
                 self.next = Token("STR", string_val)
-            else:
-                raise LexerError("String não fechada")
+                return
+            raise Exception("String não fechada")
 
-        elif self.source[self.position].isdigit():
-            numero = self.source[self.position]
+        # números
+        if ch.isdigit():
+            numero = ch
             self.position += 1
             while self.position < len(self.source) and self.source[self.position].isdigit():
                 numero += self.source[self.position]
                 self.position += 1
             self.next = Token("INT", int(numero))
+            return
 
-        elif self.source[self.position] == "-":
-            self.next = Token("MINUS", self.source[self.position])
+        # operadores simples
+        if ch == "-":
+            self.next = Token("MINUS", ch)
             self.position += 1
+            return
 
-        elif self.source[self.position] == "+":
-            self.next = Token("PLUS", self.source[self.position])
+        if ch == "+":
+            self.next = Token("PLUS", ch)
             self.position += 1
+            return
 
-        elif self.source[self.position] == "*":
-            self.next = Token("MULT", self.source[self.position])
+        if ch == "*":
+            self.next = Token("MULT", ch)
             self.position += 1
+            return
 
-        elif self.source[self.position] == "/":
-            self.next = Token("DIV", self.source[self.position])
+        if ch == "/":
+            self.next = Token("DIV", ch)
             self.position += 1
+            return
 
-        elif self.source[self.position] == "(":
-            self.next = Token("OPEN_PAR", self.source[self.position])
+        if ch == "(":
+            self.next = Token("OPEN_PAR", ch)
             self.position += 1
+            return
 
-        elif self.source[self.position] == ")":
-            self.next = Token("CLOSE_PAR", self.source[self.position])
+        if ch == ")":
+            self.next = Token("CLOSE_PAR", ch)
             self.position += 1
+            return
 
-        elif self.source[self.position] == "=":
-            # Pode ser atribuição ou comparação ==
+        if ch == "{":
+            self.next = Token("OPEN_BRA", ch)
+            self.position += 1
+            return
+
+        if ch == "}":
+            self.next = Token("CLOSE_BRA", ch)
+            self.position += 1
+            return
+
+        if ch == ",":
+            self.next = Token("COMMA", ch)  # Roteiro 9
+            self.position += 1
+            return
+
+        # comparação/atribuição
+        if ch == "=":
             if self.position + 1 < len(self.source) and self.source[self.position + 1] == "=":
                 self.next = Token("EQUAL", "==")
                 self.position += 2
             else:
-                self.next = Token("ASSIGN", self.source[self.position])
+                self.next = Token("ASSIGN", ch)
                 self.position += 1
+            return
 
-        elif self.source[self.position] == "\n":
-            self.next = Token("END", "\\n")  # ou só "\n"
+        # relacionais
+        if ch == "<":
+            self.next = Token("LT", "<")
             self.position += 1
+            return
 
-        elif self.source[self.position] == "&":
+        if ch == ">":
+            self.next = Token("GT", ">")
+            self.position += 1
+            return
+
+        # lógicos
+        if ch == "&":
             if self.position + 1 < len(self.source) and self.source[self.position + 1] == "&":
                 self.next = Token("AND", "&&")
                 self.position += 2
-            else:
-                raise LexerError(f"Caracter inválido: {self.source[self.position]}")
-            
-        elif self.source[self.position] == "|":
+                return
+            raise Exception(f"Caracter inválido: {ch}")
+
+        if ch == "|":
             if self.position + 1 < len(self.source) and self.source[self.position + 1] == "|":
                 self.next = Token("OR", "||")
                 self.position += 2
-            else:
-                raise LexerError(f"Caracter inválido: {self.source[self.position]}")
-            
-        elif self.source[self.position] == "!":
+                return
+            raise Exception(f"Caracter inválido: {ch}")
+
+        if ch == "!":
             self.next = Token("NOT", "!")
             self.position += 1
-        
-        # Abre e fecha chaves para blocos de código
-        elif self.source[self.position] == "{":
-            self.next = Token("OPEN_BRA", "{")
-            self.position += 1
-        elif self.source[self.position] == "}":
-            self.next = Token("CLOSE_BRA", "}")
-            self.position += 1
+            return
 
-        # Operadores relacionais: <, >   || LT e GT
-        elif self.source[self.position] == "<":
-            self.next = Token("LT", "<")
+        # fim de linha
+        if ch == "\n":
+            self.next = Token("END", "\\n")
             self.position += 1
-        elif self.source[self.position] == ">":
-            self.next = Token("GT", ">")
-            self.position += 1
-        
-        else:
-            raise LexerError(f"Caracter inválido: {self.source[self.position]}")
-        
+            return
+
+        raise Exception(f"Caracter inválido: {ch}")
+
+
+# =============================
+# Símbolos e Variáveis
+# =============================
+
 class Variable:
-    def __init__(self, value: int|str|bool, type: str, shift: int): # INT, STR, BOOL????????
-        self.value = value
-        self.type = type
-        self.shift = shift
+    def __init__(self, value: int | str | bool | object, type: str, is_func: bool = False):
+        self.value = value          # para função, guarda o nó FuncDec
+        self.type = type            # "int"|"string"|"bool"|"void"
+        self.is_func = is_func      # True se isto representa uma função
 
-# Alterar a classe Variable criando o atributo shift para armazenar o deslocamento da pilha. Alterar os métodos da SymbolTable para considerar o novo atributo.
+
 class SymbolTable:
-    def __init__(self, table: dict[str, Variable]):
+    def __init__(self, table: dict[str, Variable], parent: 'SymbolTable' = None):
         self.table = table
-        self.next_shift = 0
+        self.parent = parent
 
-    def create_variable(self, var: str, type: str):
-        if var in self.table:
-            raise Exception(f"Erro: variável '{var}' já declarada")
-        self.next_shift += 4
-        self.table[var] = Variable(None, type, self.next_shift)
+    def create_variable(self, name: str, var: Variable):
+        if name in self.table:
+            raise Exception(f"Variável/função '{name}' já declarada neste escopo.")
+        self.table[name] = var
 
-    def setter(self, var: str, value: int|str|bool, type: str):
-        if var not in self.table:
+    def _resolve(self, name: str) -> 'SymbolTable | None':
+        if name in self.table:
+            return self
+        if self.parent is not None:
+            return self.parent._resolve(name)
+        return None
+
+    def set(self, var: str, value: int | str | bool, type: str):
+        scope = self._resolve(var)
+        if scope is None:
             raise Exception(f"Erro: variável '{var}' não declarada")
-        if self.table[var].type != type:
-            raise Exception(f"Erro: tipo incorreto para variável '{var}'. Esperado '{self.table[var].type}', recebido '{type}'")
-        old = self.table[var]
-        self.table[var] = Variable(value, old.type, old.shift)
+        if scope.table[var].is_func:
+            raise Exception(f"Erro: '{var}' é função, não variável")
+        if scope.table[var].type != type:
+            raise Exception(f"Erro: tipo incorreto para variável '{var}'. Esperado '{scope.table[var].type}', recebido '{type}'")
+        scope.table[var] = Variable(value, scope.table[var].type)
 
-    def getter(self, var: str) -> Variable:
-        if var not in self.table:
-            raise Exception(f"Erro: variável '{var}' não declarada")
-        v = self.table[var]
-        return Variable(v.value, v.type, v.shift)
+    def getter(self, var: str):
+        scope = self._resolve(var)
+        if scope is None:
+            raise Exception(f"Erro: variável/função '{var}' não declarada")
+        v = scope.table[var]
+        return Variable(v.value, v.type, v.is_func)
 
     def get(self, name: str) -> Variable:
         return self.getter(name)
 
-class Node:
-    id = 0
 
+# =============================
+# AST Nodes + Runtime
+# =============================
+
+class Node:
     def __init__(self, value, children: list):
         self.value = value
         self.children = children
-        self.id = Node.new_id()
 
-    def new_id() -> int:
-        Node.id += 1
-        return Node.id
     def evaluate(self, st: SymbolTable):
-        """Método abstrato que deve ser sobrescrito nas subclasses."""
         pass
 
-    def generate(self, st: SymbolTable):
-        """Método abstrato que deve ser sobrescrito nas subclasses."""
-        pass
-    '''Cada nó terá uma implementação própria do generate(). Ler o PDF da aula para mais detalhes.
-
-    Lembrem-se que o retorno de um nó sempre acontecerá em EAX e você usará sempre o ECX como suporte. Não usar o EBX.
-
-    Não será gerado código para os nós que representam ou operam strings.'''
 
 class BinOp(Node):
-        
     def evaluate(self, st: SymbolTable):
         l = self.children[0].evaluate(st)
         r = self.children[1].evaluate(st)
         left_val_type, left_val = l.type, l.value
         right_val_type, right_val = r.type, r.value
 
-        def to_str(val,type):
-            if type == "bool":
+        def to_str(val, typ):
+            if typ == "bool":
                 return "true" if val != 0 else "false"
             return str(val)
-        
 
         if self.value == "PLUS":
             if left_val_type == "string" or right_val_type == "string":
-                return Variable(to_str(left_val,left_val_type) + to_str(right_val,right_val_type), "string")
+                return Variable(to_str(left_val, left_val_type) + to_str(right_val, right_val_type), "string")
             if left_val_type == right_val_type == "int":
                 return Variable(left_val + right_val, "int")
-            raise SemanticError(f"Operação '+' inválida entre '{left_val_type}' e '{right_val_type}'")
+            raise Exception(f"Operação '+' inválida entre '{left_val_type}' e '{right_val_type}'")
 
         elif self.value == "MINUS":
             if left_val_type == right_val_type == "int":
                 return Variable(left_val - right_val, "int")
-            raise SemanticError(f"Operação '-' inválida entre '{left_val_type}' e '{right_val_type}'")
+            raise Exception(f"Operação '-' inválida entre '{left_val_type}' e '{right_val_type}'")
 
         elif self.value == "MULT":
             if left_val_type == right_val_type == "int":
                 return Variable(left_val * right_val, "int")
-            raise SemanticError(f"Operação '*' inválida entre '{left_val_type}' e '{right_val_type}'")
+            raise Exception(f"Operação '*' inválida entre '{left_val_type}' e '{right_val_type}'")
 
         elif self.value == "DIV":
             if left_val_type == right_val_type == "int":
                 if right_val == 0:
-                    raise SemanticError("Divisão por zero.")
+                    raise Exception("Divisão por zero.")
                 return Variable(left_val // right_val, "int")
-            raise SemanticError(f"Operação '/' inválida entre '{left_val_type}' e '{right_val_type}'")
+            raise Exception(f"Operação '/' inválida entre '{left_val_type}' e '{right_val_type}'")
 
         elif self.value == "EQUAL":
             if left_val_type != right_val_type:
-                raise SemanticError(f"Operação '==' inválida entre '{left_val_type}' e '{right_val_type}'")
+                raise Exception(f"Operação '==' inválida entre '{left_val_type}' e '{right_val_type}'")
             return Variable(1 if left_val == right_val else 0, "bool")
 
         elif self.value == "LT":
@@ -316,372 +303,380 @@ class BinOp(Node):
                 return Variable(1 if left_val < right_val else 0, "bool")
             if left_val_type == right_val_type == "string":
                 return Variable(1 if str(left_val) < str(right_val) else 0, "bool")
-            raise SemanticError(f"Operação '<' inválida entre '{left_val_type}' e '{right_val_type}'")
+            raise Exception(f"Operação '<' inválida entre '{left_val_type}' e '{right_val_type}'")
 
-        elif self.value == "GT":   
+        elif self.value == "GT":
             if left_val_type == right_val_type == "int":
                 return Variable(1 if left_val > right_val else 0, "bool")
             if left_val_type == right_val_type == "string":
                 return Variable(1 if str(left_val) > str(right_val) else 0, "bool")
-            raise SemanticError(f"Operação '>' inválida entre '{left_val_type}' e '{right_val_type}'")
+            raise Exception(f"Operação '>' inválida entre '{left_val_type}' e '{right_val_type}'")
 
         elif self.value == "AND":
             if left_val_type == right_val_type == "bool":
                 return Variable(1 if (left_val != 0 and right_val != 0) else 0, "bool")
-            raise SemanticError(f"Operação '&&' inválida entre '{left_val_type}' e '{right_val_type}'")
+            raise Exception(f"Operação '&&' inválida entre '{left_val_type}' e '{right_val_type}'")
 
         elif self.value == "OR":
             if left_val_type == right_val_type == "bool":
                 return Variable(1 if (left_val != 0 or right_val != 0) else 0, "bool")
-            raise SemanticError(f"Operação '||' inválida entre '{left_val_type}' e '{right_val_type}'")
+            raise Exception(f"Operação '||' inválida entre '{left_val_type}' e '{right_val_type}'")
+
         else:
-            raise SemanticError(f"Operador binário desconhecido: {self.value}")
-        
-    def generate(self, st: SymbolTable):
-        op = self.value
-
-        # direita
-        self.children[1].generate(st)
-        Code.append("push eax")
-        # esquerda
-        self.children[0].generate(st)
-        Code.append("pop ecx")
-
-        if op == 'PLUS':
-            Code.append("add eax, ecx")
-        elif op == 'MINUS':
-            Code.append("sub eax, ecx")
-        elif op == 'MULT':
-            Code.append("imul ecx")
-        elif op == 'DIV':
-            # Divisão de inteiros: EDX:EAX / ECX -> EAX (quociente)
-            Code.append("cdq")       # estende o sinal p/ EDX
-            Code.append("idiv ecx")
-        elif op == 'AND':
-            # Converte em 0/1 e faz AND lógico
-            Code.append("cmp eax, 0")
-            Code.append("mov eax, 0")
-            Code.append("mov edx, 1")
-            Code.append("cmovne eax, edx")   # eax = (esq != 0) ? 1 : 0
-            Code.append("cmp ecx, 0")
-            Code.append("mov ecx, 0")
-            Code.append("mov edx, 1")
-            Code.append("cmovne ecx, edx")   # ecx = (dir != 0) ? 1 : 0
-            Code.append("and eax, ecx")      # 1 & 1 => 1, senão 0
-        elif op == 'OR':
-            Code.append("cmp eax, 0")
-            Code.append("mov eax, 0")
-            Code.append("mov edx, 1")
-            Code.append("cmovne eax, edx")
-            Code.append("cmp ecx, 0")
-            Code.append("mov ecx, 0")
-            Code.append("mov edx, 1")
-            Code.append("cmovne ecx, edx")
-            Code.append("or eax, ecx")       # 1 | x => 1
-        elif op in ('EQUAL', 'GT', 'LT'):
-            # relacionais: deixam 0/1 em EAX usando CMP + CMOV*
-            Code.append("cmp eax, ecx")
-            Code.append("mov eax, 0")
-            Code.append("mov ecx, 1")
-            if op == 'EQUAL':
-                Code.append("cmove eax, ecx")
-            elif op == 'GT':
-                Code.append("cmovg eax, ecx")
-            elif op == 'LT':
-                Code.append("cmovl eax, ecx")
-        else:
-            raise Exception(f"Operador inválido: {op}")
-    
-
+            raise Exception(f"Operador binário desconhecido: {self.value}")
 
 
 class UnOp(Node):
-
     def evaluate(self, st: SymbolTable):
         val = self.children[0].evaluate(st)
-
         if self.value == "PLUS":
-            if val.type != "int":
-                raise SemanticError(f"Operação unária '+' inválida para '{val.type}'")
             return Variable(val.value, "int")
         elif self.value == "MINUS":
-            if val.type != "int":
-                raise SemanticError(f"Operação unária '-' inválida para '{val.type}'")
             return Variable(-val.value, "int")
         elif self.value == "NOT":
-            if val.type != "bool":
-                raise SemanticError(f"Operação unária '!' inválida para '{val.type}'")
             return Variable(0 if val.value else 1, "bool")
         else:
-            raise SemanticError(f"Operador unário desconhecido: {self.value}")
+            raise Exception(f"Operador unário desconhecido: {self.value}")
 
-    def generate(self, st):
-        self.children[0].generate(st)  # resultado em EAX
-        if self.value == 'PLUS':
-            Code.append("; unary plus (noop)")
-        elif self.value == 'MINUS':
-            Code.append("neg eax ; unary minus")
-        elif self.value == 'NOT':
-            # espera booleano 0/1 em EAX e devolve 0->1, !=0->0
-            # estratégia: if eax==0 => eax=1 else eax=0
-            Code.append("cmp eax, 0")
-            Code.append("mov ecx, 1")
-            Code.append("mov eax, 0")
-            Code.append("cmove eax, ecx ; !bool")
-        else:
-            raise Exception(f"Operador unário inválido: {self.value}")
 
 class IntVal(Node):
     def evaluate(self, st: SymbolTable):
         return Variable(self.value, "int")
-    
-    def generate(self, st: SymbolTable):
-        # mov eax, 3 ; Generate do IntVal
-        Code.append(f"mov eax, {self.value} ; IntVal")
 
-    
 
 class NoOp(Node):
     def evaluate(self, st):
         pass
 
+
 class Assignment(Node):
     def evaluate(self, st: SymbolTable):
         var_name = self.children[0].value
-        var_value = self.children[1].evaluate(st)   # var_value é Variable
-        st.set(var_name, var_value.value, var_value.type)  # << AQUI
+        var_value = self.children[1].evaluate(st)
+        st.set(var_name, var_value.value, var_value.type)
 
-
-    def generate(self, st):
-        var_name = self.children[0].value
-        var = st.getter(var_name)
-        self.children[1].generate(st)  # valor em EAX
-        Code.append(f"mov [ebp-{var.shift}], eax ; {var_name} = expr")
-    
 
 class Identifier(Node):
     def evaluate(self, st: SymbolTable):
         return st.get(self.value)
-    
-    def generate(self, st):
-        var = st.getter(self.value)
-        if var.shift is None:
-            raise Exception("Identifier sem shift (não é variável local).")
-        Code.append(f"mov eax, [ebp-{var.shift}] ; Identifier {self.value}")
-         
-        
+
 
 class BoolVal(Node):
-
     def evaluate(self, st: SymbolTable):
         return Variable(1 if self.value else 0, "bool")
-    
-    def generate(self, st: SymbolTable):
-        val = 1 if self.value else 0
-        Code.append(f"mov eax, {val} ; BoolVal")
+
 
 class StringVal(Node):
     def evaluate(self, st: SymbolTable):
         return Variable(self.value, "string")
 
-    def generate(self, st: SymbolTable):
-        raise Exception("Geração de código para 'string' não suportada no Roteiro 8.")
-    
-    
+
 class VarDec(Node):
-    def evaluate(self, st):
+    def evaluate(self, st: SymbolTable):
         var_name = self.children[0].value
         dec_type = self.value  # "int" | "string" | "bool"
-    
         if dec_type not in ("int", "string", "bool"):
-            raise SemanticError(f"Tipo de variável desconhecido: {dec_type}")
+            raise Exception(f"Tipo de variável desconhecido: {dec_type}")
 
         defaults = {"int": 0, "string": "", "bool": 0}
 
         if len(self.children) == 2:
-            rhs = self.children[1].evaluate(st)  # rhs é um Variable
+            rhs = self.children[1].evaluate(st)
             if rhs.type != dec_type:
-                raise SemanticError(
+                raise Exception(
                     f"Tipo incompatível na inicialização da variável '{var_name}'. "
                     f"Esperado '{dec_type}', recebido '{rhs.type}'."
                 )
             st.create_variable(var_name, Variable(rhs.value, dec_type))
-            # opcional: já retorna a variável criada
             return Variable(rhs.value, dec_type)
 
-        # sem inicialização
         dv = defaults[dec_type]
         st.create_variable(var_name, Variable(dv, dec_type))
         return Variable(dv, dec_type)
 
-    def generate(self, st: SymbolTable):
-        var_name = self.children[0].value
-        dec_type = self.value  # "number" | "boolean" | "string"
-
-        if dec_type == "string":
-            raise Exception("Strings não têm geração de código neste roteiro.")
-
-        # reserva 4 bytes na pilha
-        Code.append("sub esp, 4 ; aloca espaço para variável")
-
-        # registra a variável 
-        st.create_variable(var_name, dec_type)
-        var = st.getter(var_name)  # tem var.shift
-
-        # inicialização 
-        if len(self.children) == 2:
-            # gera a expressão (resultado em EAX)
-            self.children[1].generate(st)
-            Code.append(f"mov [ebp-{var.shift}], eax ; {var_name} = expr (init)")
-        else:
-            Code.append(f"mov dword [ebp-{var.shift}], 0 ; {var_name} = 0 (default)")
-
-
-
-class Block(Node):
-    def evaluate(self, st: SymbolTable):
-        for stmt in self.children:
-            stmt.evaluate(st)
-
-    def generate(self, st):
-        for child in self.children:
-            child.generate(st)
 
 class Print(Node):
     def evaluate(self, st: SymbolTable):
         value = self.children[0].evaluate(st)
         if value.type == "bool":
-            print ("true" if value.value != 0 else "false")
+            print("true" if value.value != 0 else "false")
         else:
             print(value.value)
-    
-    def generate(self, st):
-        self.children[0].generate(st)     # valor em EAX
-        Code.append("push eax")
-        Code.append("push format_out")
-        Code.append("call printf")
-        Code.append("add esp, 8")
 
-class While(Node):
-    def evaluate(self, st: SymbolTable):
-        condicao = self.children[0].evaluate(st)
-        if condicao.type != "bool":
-            raise SemanticError("Condição do 'while' deve ser do tipo bool.")
-        
-        while self.children[0].evaluate(st).value != 0: # 0 é falso
-            self.children[1].evaluate(st)
 
-    def generate(self, st: SymbolTable):
-        my = self.id
-        Code.append(f"loop_{my}:")
-        self.children[0].generate(st)   # condição -> EAX
-        Code.append("cmp eax, 0")
-        Code.append(f"je exit_{my}")
-        self.children[1].generate(st)   # corpo
-        Code.append(f"jmp loop_{my}")
-        Code.append(f"exit_{my}:")
-          
-            
-
-class If(Node):
-    def evaluate(self, st: SymbolTable):
-        condicao = self.children[0].evaluate(st)
-        if condicao.type != "bool":
-            raise SemanticError("Condição do 'if' deve ser do tipo bool.")
-        
-        if condicao != 0: # 0 é falso
-            self.children[1].evaluate(st)
-        elif len(self.children) == 3: # existe o bloco else
-            self.children[2].evaluate(st)
-    
-    def generate(self, st):
-        my = self.id
-        self.children[0].generate(st)      # cond em EAX
-        Code.append("cmp eax, 0")
-        if len(self.children) == 2:
-            Code.append(f"je exit_{my}")
-            self.children[1].generate(st)  # then
-            Code.append(f"exit_{my}:")
-        else:
-            Code.append(f"je else_{my}")
-            self.children[1].generate(st)  # then
-            Code.append(f"jmp exit_{my}")
-            Code.append(f"else_{my}:")
-            self.children[2].generate(st)  # else
-            Code.append(f"exit_{my}:")
-
-            
 class Read(Node):
     def evaluate(self, st: SymbolTable):
         value = int(input())
         return Variable(value, "int")
-    
-    def generate(self, st):
-        Code.append("push scan_int")
-        Code.append("push format_in")
-        Code.append("call scanf")
-        Code.append("add esp, 8")
-        Code.append("mov eax, dword [scan_int] ; Read()")
-    
 
 
+# ===== Controle de fluxo com 'return' via exceção =====
 
+class ReturnException(Exception):
+    def __init__(self, value: Variable):
+        super().__init__("Return")
+        self.value = value
+
+
+class Return(Node):
+    # value = "RETURN", children = [expr]
+    def evaluate(self, st: SymbolTable):
+        val = self.children[0].evaluate(st)
+        raise ReturnException(val)
+
+
+class Block(Node):
+    def evaluate(self, st: SymbolTable):
+        for stmt in self.children:
+            if isinstance(stmt, Block):
+                # novo escopo para bloco filho
+                child_st = SymbolTable({}, parent=st)
+                try:
+                    stmt.evaluate(child_st)
+                except ReturnException as e:
+                    # propaga para cima
+                    raise e
+            else:
+                try:
+                    stmt.evaluate(st)
+                except ReturnException as e:
+                    raise e
+
+
+class While(Node):
+    def evaluate(self, st: SymbolTable):
+        cond = self.children[0].evaluate(st)
+        if cond.type != "bool":
+            raise Exception("Condição do 'while' deve ser do tipo bool.")
+        while self.children[0].evaluate(st).value != 0:
+            try:
+                self.children[1].evaluate(st)
+            except ReturnException as e:
+                # return dentro do while propaga
+                raise e
+
+
+class If(Node):
+    def evaluate(self, st: SymbolTable):
+        cond = self.children[0].evaluate(st)
+        if cond.type != "bool":
+            raise Exception("Condição do 'if' deve ser do tipo bool.")
+        try:
+            if cond.value != 0:
+                self.children[1].evaluate(st)
+            elif len(self.children) == 3:
+                self.children[2].evaluate(st)
+        except ReturnException as e:
+            raise e
+
+
+# ===== Funções =====
+
+class FuncDec(Node):
+    """
+    value = return_type ('int'|'string'|'bool'|'void')
+    children = [ Identifier(nome), VarDec(param1), ..., VarDec(paramN), Block(corpo) ]
+    """
+    def evaluate(self, st: SymbolTable):
+        func_name = self.children[0].value
+        st.create_variable(func_name, Variable(self, self.value, is_func=True))
+        return Variable(None, "void")
+
+
+class FuncCall(Node):
+    """
+    value = nome da função
+    children = [ exprArg1, exprArg2, ... ]
+    """
+    def evaluate(self, st: SymbolTable):
+        sym = st.getter(self.value)
+        if not sym.is_func:
+            raise Exception(f"'{self.value}' não é função.")
+        func_node: FuncDec = sym.value
+
+        params = func_node.children[1:-1]  # VarDecs
+        body = func_node.children[-1]      # Block
+
+        if len(self.children) != len(params):
+            raise Exception(f"Chamada incorreta: função '{self.value}' espera {len(params)} argumento(s), recebeu {len(self.children)}.")
+
+        call_st = SymbolTable({}, parent=st)
+
+        # parâmetros
+        for arg_expr, param_vardec in zip(self.children, params):
+            param_name = param_vardec.children[0].value
+            param_type = param_vardec.value  # "int"|"string"|"bool"
+
+            # declarar no escopo da chamada
+            default = 0 if param_type == "int" else ("" if param_type == "string" else 0)
+            call_st.create_variable(param_name, Variable(default, param_type))
+
+            # avaliar o argumento no escopo de chamada do *caller*
+            arg_val = arg_expr.evaluate(st)
+            if arg_val.type != param_type:
+                raise Exception(f"Tipo do argumento '{param_name}' inválido: esperado {param_type}, recebeu {arg_val.type}")
+            call_st.set(param_name, arg_val.value, arg_val.type)
+
+        # executar corpo
+        ret_value = None
+        try:
+            body.evaluate(call_st)
+        except ReturnException as e:
+            ret_value = e.value  # Variable
+
+        # checar tipo de retorno
+        ret_type = func_node.value  # "int"|"string"|"bool"|"void"
+        if ret_type == "void":
+            # se houver 'return expr' numa void, você pode transformar em erro;
+            # aqui ignoramos o ret_value se aparecer.
+            return Variable(None, "void")
+        else:
+            if not isinstance(ret_value, Variable):
+                raise Exception(f"Função '{self.value}' deve retornar '{ret_type}', mas não retornou.")
+            if ret_value.type != ret_type:
+                raise Exception(f"Função '{self.value}' retornou tipo '{ret_value.type}', esperado '{ret_type}'.")
+            return ret_value
+
+
+# =============================
+# Parser
+# =============================
 
 class Parser:
+    lex: Lexer = None
+
+    @staticmethod
     def parse_program() -> Block:
+        """
+        Programa = { DeclFunc | DeclVar | Statement }*  EOF
+        (nós de função e var podem aparecer misturados; o run chamará main())
+        """
         statements = []
         while Parser.lex.next.kind != "EOF":
-            statements.append(Parser.parse_statement())
-        return Block("BLOCK",statements)
-    
+            if Parser.lex.next.kind == "FUNC":
+                statements.append(Parser.parse_func_declaration())
+            else:
+                statements.append(Parser.parse_statement())
+        return Block("BLOCK", statements)
+
+    @staticmethod
     def parse_block() -> Block:
         if Parser.lex.next.kind == "OPEN_BRA":
-            Parser.lex.select_next() # Avança para o próximo token
+            Parser.lex.select_next()
             children = []
             while Parser.lex.next.kind != "CLOSE_BRA":
                 node = Parser.parse_statement()
                 children.append(node)
             if Parser.lex.next.kind == "CLOSE_BRA":
                 if len(children) == 0:
-                    raise ParserError("Erro: bloco vazio não é permitido")
-                Parser.lex.select_next() # Avança para o próximo token
+                    raise Exception("Erro: bloco vazio não é permitido")
+                Parser.lex.select_next()
                 return Block("BLOCK", children)
             else:
-                raise ParserError("Erro: esperado '}' no final do bloco")
+                raise Exception("Erro: esperado '}' no final do bloco")
         else:
-            raise ParserError("Erro: esperado '{' no início do bloco")
-    
+            raise Exception("Erro: esperado '{' no início do bloco")
 
+    @staticmethod
+    def parse_func_declaration() -> Node:
+        # estamos em FUNC
+        Parser.lex.select_next()
+        if Parser.lex.next.kind != "IDEN":
+            raise Exception("Esperado identificador após 'func'.")
+        func_name = Identifier(Parser.lex.next.value, [])
+        Parser.lex.select_next()
 
+        if Parser.lex.next.kind != "OPEN_PAR":
+            raise Exception("Esperado '(' na declaração de função.")
+        Parser.lex.select_next()
+
+        params = []
+        if Parser.lex.next.kind != "CLOSE_PAR":
+            while True:
+                if Parser.lex.next.kind != "IDEN":
+                    raise Exception("Esperado identificador de parâmetro.")
+                p_id = Identifier(Parser.lex.next.value, [])
+                Parser.lex.select_next()
+                if Parser.lex.next.kind != "TYPE":
+                    raise Exception("Esperado tipo do parâmetro.")
+                p_type = Parser.lex.next.value
+                Parser.lex.select_next()
+                params.append(VarDec(p_type, [p_id]))
+                if Parser.lex.next.kind == "COMMA":
+                    Parser.lex.select_next()
+                    continue
+                break
+        if Parser.lex.next.kind != "CLOSE_PAR":
+            raise Exception("Esperado ')' após parâmetros.")
+        Parser.lex.select_next()
+
+        # tipo de retorno opcional
+        ret_type = "void"
+        if Parser.lex.next.kind == "TYPE":
+            ret_type = Parser.lex.next.value
+            Parser.lex.select_next()
+
+        # corpo
+        body = Parser.parse_block()
+        return FuncDec(ret_type, [func_name] + params + [body])
+
+    @staticmethod
     def parse_statement() -> Node:
         if Parser.lex.next.kind == "END":
             folha = NoOp("NoOp", [])
             Parser.lex.select_next()
             return folha
-        
+
+        elif Parser.lex.next.kind == "RETURN":
+            Parser.lex.select_next()
+            expr = Parser.parseBoolExpression()
+            if Parser.lex.next.kind != "END":
+                raise Exception("Esperado fim de linha após 'return'.")
+            Parser.lex.select_next()
+            return Return("RETURN", [expr])
+
         elif Parser.lex.next.kind == "IDEN":
             id_node = Identifier(Parser.lex.next.value, [])
             Parser.lex.select_next()
+            # chamada de função como statement?
+            if Parser.lex.next.kind == "OPEN_PAR":
+                Parser.lex.select_next()
+                args = []
+                if Parser.lex.next.kind != "CLOSE_PAR":
+                    while True:
+                        args.append(Parser.parseBoolExpression())
+                        if Parser.lex.next.kind == "COMMA":
+                            Parser.lex.select_next()
+                            continue
+                        break
+                if Parser.lex.next.kind != "CLOSE_PAR":
+                    raise Exception("Esperado ')' na chamada de função.")
+                Parser.lex.select_next()
+                if Parser.lex.next.kind != "END":
+                    raise Exception("Esperado fim de linha após chamada de função.")
+                Parser.lex.select_next()
+                return FuncCall(id_node.value, args)
+
+            # atribuição
             if Parser.lex.next.kind != "ASSIGN":
-                raise ParserError("Esperado '=' após identificador.")
+                raise Exception("Esperado '=' ou '(' após identificador.")
             Parser.lex.select_next()
             expr_node = Parser.parseBoolExpression()
             if Parser.lex.next.kind != "END":
-                raise ParserError("Esperado fim de linha após expressão.")
+                raise Exception("Esperado fim de linha após expressão.")
             Parser.lex.select_next()
             return Assignment("ASSIGN", [id_node, expr_node])
-        
+
         elif Parser.lex.next.kind == "IF":
             Parser.lex.select_next()
             cond_node = Parser.parseBoolExpression()
             if Parser.lex.next.kind == "END":
-                raise ParserError("Unexpected token NEWLINE")
+                raise Exception("Unexpected token NEWLINE")
             then_node = Parser.parse_statement()
-            else_node = None
             if Parser.lex.next.kind == "ELSE":
                 Parser.lex.select_next()
                 if Parser.lex.next.kind == "END":
-                    raise ParserError("Unexpected token NEWLINE")
+                    raise Exception("Unexpected token NEWLINE")
                 else_node = Parser.parse_statement()
                 return If("IF", [cond_node, then_node, else_node])
             return If("IF", [cond_node, then_node])
@@ -689,71 +684,72 @@ class Parser:
         elif Parser.lex.next.kind == "VAR":
             Parser.lex.select_next()
             if Parser.lex.next.kind != "IDEN":
-                raise ParserError("Esperado identificador após 'var'.")
+                raise Exception("Esperado identificador após 'var'.")
             id_node = Identifier(Parser.lex.next.value, [])
-
             Parser.lex.select_next()
             if Parser.lex.next.kind != "TYPE":
-                raise ParserError("Esperado tipo após identificador.")
-            
+                raise Exception("Esperado tipo após identificador.")
             type_node = Parser.lex.next.value
             Parser.lex.select_next()
-
             expr_node = None
             if Parser.lex.next.kind == "ASSIGN":
                 Parser.lex.select_next()
                 expr_node = Parser.parseBoolExpression()
-                
-            
             if Parser.lex.next.kind != "END":
-                raise ParserError("Esperado fim de linha após declaração.")
+                raise Exception("Esperado fim de linha após declaração.")
             Parser.lex.select_next()
             return VarDec(type_node, [id_node] + ([expr_node] if expr_node else []))
-        
+
         elif Parser.lex.next.kind == "WHILE":
             Parser.lex.select_next()
             cond_node = Parser.parseBoolExpression()
             if Parser.lex.next.kind == "END":
-                raise ParserError("Unexpected token NEWLINE")
+                raise Exception("Unexpected token NEWLINE")
             body_node = Parser.parse_block()
-            return While("WHILE", [cond_node, body_node])  
-        
+            return While("WHILE", [cond_node, body_node])
+
         elif Parser.lex.next.kind == "PRINT":
             Parser.lex.select_next()
             if Parser.lex.next.kind != "OPEN_PAR":
-                raise ParserError("Esperado '(' após 'Println'.")
+                raise Exception("Esperado '(' após 'Println'.")
             Parser.lex.select_next()
             expr_node = Parser.parseBoolExpression()
             if Parser.lex.next.kind != "CLOSE_PAR":
-                raise ParserError("Esperado ')' após expressão.")
+                raise Exception("Esperado ')' após expressão.")
             Parser.lex.select_next()
             if Parser.lex.next.kind != "END":
-                raise ParserError("Esperado fim de linha após expressão.")
+                raise Exception("Esperado fim de linha após expressão.")
             Parser.lex.select_next()
             return Print("PRINT", [expr_node])
-        
+
         elif Parser.lex.next.kind == "OPEN_BRA":
             return Parser.parse_block()
-        
-        else:
-            raise ParserError(f"Token inesperado: {Parser.lex.next.kind}")
-        
 
-    def parseBoolExpression() -> int:
+        elif Parser.lex.next.kind == "FUNC":
+            # permite função fora de parse_program (robustez)
+            return Parser.parse_func_declaration()
+
+        else:
+            raise Exception(f"Token inesperado: {Parser.lex.next.kind}")
+
+    @staticmethod
+    def parseBoolExpression():
         node = Parser.parseBoolTerm()
         if Parser.lex.next.kind == "OR":
             Parser.lex.select_next()
             node = BinOp("OR", [node, Parser.parseBoolTerm()])
         return node
-    
-    def parseBoolTerm() -> int:
+
+    @staticmethod
+    def parseBoolTerm():
         node = Parser.parser_relExpression()
         if Parser.lex.next.kind == "AND":
             Parser.lex.select_next()
             node = BinOp("AND", [node, Parser.parser_relExpression()])
         return node
-    
-    def parser_relExpression() -> int:
+
+    @staticmethod
+    def parser_relExpression():
         node = Parser.parse_expression()
         if Parser.lex.next.kind in ("EQUAL", "LT", "GT"):
             op = Parser.lex.next.kind
@@ -761,7 +757,8 @@ class Parser:
             node = BinOp(op, [node, Parser.parse_expression()])
         return node
 
-    def parse_expression() -> int:
+    @staticmethod
+    def parse_expression():
         node = Parser.parse_term()
         while Parser.lex.next.kind in ("PLUS", "MINUS"):
             if Parser.lex.next.kind == "PLUS":
@@ -772,6 +769,7 @@ class Parser:
                 node = BinOp("MINUS", [node, Parser.parse_term()])
         return node
 
+    @staticmethod
     def parse_term():
         node = Parser.parse_factor()
         while Parser.lex.next.kind in ("MULT", "DIV"):
@@ -783,122 +781,112 @@ class Parser:
                 node = BinOp("DIV", [node, Parser.parse_factor()])
         return node
 
-
-    # Corrigir a função parseFactor() para incluir a operação unária NOT e a função READ.
-
-
+    @staticmethod
     def parse_factor():
         if Parser.lex.next.kind == "INT":
-            node = IntVal(Parser.lex.next.value,[])
+            node = IntVal(Parser.lex.next.value, [])
             Parser.lex.select_next()
             return node
-        
+
         elif Parser.lex.next.kind == "OPEN_PAR":
             Parser.lex.select_next()
             node = Parser.parseBoolExpression()
             if Parser.lex.next.kind != "CLOSE_PAR":
-                raise ParserError("Faltando )")
+                raise Exception("Faltando )")
             Parser.lex.select_next()
             return node
+
         elif Parser.lex.next.kind == "BOOL":
-            node = BoolVal(Parser.lex.next.value,[])
+            node = BoolVal(Parser.lex.next.value, [])
             Parser.lex.select_next()
             return node
+
         elif Parser.lex.next.kind == "STR":
-            node = StringVal(Parser.lex.next.value,[])
+            node = StringVal(Parser.lex.next.value, [])
             Parser.lex.select_next()
             return node
-        
+
         elif Parser.lex.next.kind == "READ":
             Parser.lex.select_next()
             if Parser.lex.next.kind != "OPEN_PAR":
-                raise ParserError("Esperado '(' após 'Scanln'.")
+                raise Exception("Esperado '(' após 'Scanln'.")
             Parser.lex.select_next()
             if Parser.lex.next.kind != "CLOSE_PAR":
-                raise ParserError("Esperado ')' após 'Scanln('.")
+                raise Exception("Esperado ')' após 'Scanln('.")
             Parser.lex.select_next()
             return Read("READ", [])
-        
+
         elif Parser.lex.next.kind == "NOT":
             Parser.lex.select_next()
             return UnOp("NOT", [Parser.parse_factor()])
-        
+
         elif Parser.lex.next.kind == "MINUS":
             Parser.lex.select_next()
             return UnOp("MINUS", [Parser.parse_factor()])
-        
+
         elif Parser.lex.next.kind == "PLUS":
             Parser.lex.select_next()
             return UnOp("PLUS", [Parser.parse_factor()])
-        
+
         elif Parser.lex.next.kind == "IDEN":
-            node = Identifier(Parser.lex.next.value, [])
+            id_name = Parser.lex.next.value
             Parser.lex.select_next()
-            return node
+            # chamada de função como expressão?
+            if Parser.lex.next.kind == "OPEN_PAR":
+                Parser.lex.select_next()
+                args = []
+                if Parser.lex.next.kind != "CLOSE_PAR":
+                    while True:
+                        args.append(Parser.parseBoolExpression())
+                        if Parser.lex.next.kind == "COMMA":
+                            Parser.lex.select_next()
+                            continue
+                        break
+                if Parser.lex.next.kind != "CLOSE_PAR":
+                    raise Exception("Esperado ')' na chamada de função.")
+                Parser.lex.select_next()
+                return FuncCall(id_name, args)
+            return Identifier(id_name, [])
 
         else:
-            raise ParserError(f"Erro: token inesperado '{Parser.lex.next.kind}'")
-        
+            raise Exception(f"Erro: token inesperado '{Parser.lex.next.kind}'")
 
     @staticmethod
     def run(code: str) -> Node:
-        # print(code)
         clean = Prepro.filter(code)
-        # print(clean)
         Parser.lex = Lexer(clean, 0, None)
-        # print(Parser.lex)
         Parser.lex.select_next()
         ast = Parser.parse_program()
         if Parser.lex.next.kind != "EOF":
-            raise ParserError("Tokens remanescentes após o fim do programa.")
+            raise Exception("Tokens remanescentes após o fim do programa.")
         return ast
-    
+
+
+# =============================
+# Entrypoint
+# =============================
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Uso: python3 main.py teste.go")
         sys.exit(1)
 
     filename = sys.argv[1]
+    with open(filename, "r", encoding="utf-8") as f:
+        code = f.read()
+
+    root = Parser.run(code)
+    global_st = SymbolTable({})
+
+    # 1) avalia topo: registra funções, inicializa globais
+    root.evaluate(global_st)
+
+    # 2) chama main() automaticamente (sem argumentos)
     try:
-        with open(filename, "r", encoding="utf-8") as f:
-            code = f.read()
-
-        # mantém seu filtro (pode incluir o '\n' final se quiser)
-        code = Prepro.filter(code)
-
-        # --- fase de PARSE ---
-        try:
-            root = Parser.run(code)
-        except LexerError as e:
-            print(f"[Lexer] {e}")
-            sys.exit(1)
-        except ParserError as e:
-            print(f"[Parser] {e}")
-            sys.exit(1)
-        except Exception as e:
-            # qualquer outra exceção durante parsing: trate como Parser
-            print(f"[Parser] {e}")
-            sys.exit(1)
-
-        # --- fase SEMÂNTICA/EXECUÇÃO ---
-        try:
-            st = SymbolTable({})
-            root.generate(st)
-            
-            import os
-            base, _ = os.path.splitext(filename)
-            out_asm = base + ".asm"
-            Code.dump(out_asm)
-            print(f"[OK] Assembly gerado em: {out_asm}")
-        except SemanticError as e:
-            print(f"[Semantic] {e}")
-            sys.exit(1)
-        except Exception as e:
-            # exceções em evaluate() são semânticas por convenção aqui
-            print(f"[Semantic] {e}")
-            sys.exit(1)
-
+        call_main = FuncCall("main", [])
+        ret = call_main.evaluate(global_st)  # pode retornar Variable ou 'void'
+        # se quiser exibir o retorno quando for int/string/bool, pode descomentar:
+        # if isinstance(ret, Variable) and ret.type != "void":
+        #     print(ret.value)
     except Exception as e:
-        # fallback de segurança (I/O etc.)
-        print(f"[Parser] {e}")
-        sys.exit(1)
+        raise
