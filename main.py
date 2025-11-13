@@ -148,7 +148,7 @@ class Lexer:
 
         # comparação/atribuição
         if ch == "=":
-            if self.position + 1 < len(self.source) and self.source[self.position + 1] == "==":
+            if self.position + 1 < len(self.source) and self.source[self.position + 1] == "=":
                 self.next = Token("EQUAL", "==")
                 self.position += 2
             else:
@@ -769,7 +769,7 @@ class Parser:
     @staticmethod
     def parseBoolExpression():
         node = Parser.parseBoolTerm()
-        if Parser.lex.next.kind == "OR":
+        while Parser.lex.next.kind == "OR":
             Parser.lex.select_next()
             if not Parser.token_starts_factor(Parser.lex.next.kind):
                 Parser.parser_error("Missing expression after '||'")
@@ -779,7 +779,7 @@ class Parser:
     @staticmethod
     def parseBoolTerm():
         node = Parser.parser_relExpression()
-        if Parser.lex.next.kind == "AND":
+        while Parser.lex.next.kind == "AND":
             Parser.lex.select_next()
             if not Parser.token_starts_factor(Parser.lex.next.kind):
                 Parser.parser_error("Missing expression after '&&'")
@@ -789,7 +789,7 @@ class Parser:
     @staticmethod
     def parser_relExpression():
         node = Parser.parse_expression()
-        if Parser.lex.next.kind in ("EQUAL", "LT", "GT"):
+        while Parser.lex.next.kind in ("EQUAL", "LT", "GT"):
             op = Parser.lex.next.kind
             Parser.lex.select_next()
             if not Parser.token_starts_factor(Parser.lex.next.kind):
@@ -827,7 +827,7 @@ class Parser:
         k = Parser.lex.next.kind
 
         # expressão vazia em locais que exigem fator
-        if k in ("END", "CLOSE_PAR", "CLOSE_BRA"):
+        if k in ("END", "CLOSE_PAR", "CLOSE_BRA", "COMMA"):
             Parser.parser_error("Empty expression")
 
         if k == "INT":
