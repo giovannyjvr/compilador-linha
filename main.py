@@ -27,32 +27,46 @@ class Code:
 
     def dump(filename: str) -> None:
         with open(filename, 'w') as file:
-            # Escrever o cabeçalho: até início do código gerado            
-            file.write("section .data\n")
-            file.write("format_out: db \"%d\", 10, 0 ; format do printf\n")
-            file.write("format_in: db \"%d\", 0 ; format do scanf\n")
-            file.write("scan_int: dd 0; 32-bits integer\n\n")
-            file.write("section .text\n\n")
-            file.write("extern printf ; usar _printf para Windows\n")
-            file.write("extern scanf ; usar _scanf para Windows\n")
-            file.write("global _start ; início do programa\n")
-            file.write("_start:\n")
-            file.write("push ebp ; guarda o EBP\n")
-            file.write("mov ebp, esp ; zera a pilha\n")
+            # Escrever o cabeçalho: até início do código gerado
+            file.write("\n; CABEÇALHO DO ARQUIVO\n")
+            file.write(''' 
+                section .data
+                format_out: db "%d", 10, 0 ; format do printf
+                format_in: db "%d", 0 ; format do scanf
+                scan_int: dd 0; 32-bits integer
 
+                section .text
+
+                extern printf ; usar _printf para Windows
+                extern scanf ; usar _scanf para Windows
+                ; extern _ExitProcess@4 ; usar para Windows
+                global _start ; início do programa
+
+                _start:
+                push ebp ; guarda o EBP
+                mov ebp, esp ; zera a pilha        
+            ''')
+
+            file.write("\n; aqui começa o codigo gerado:\n")
             # Escreve as instruções armazenadas
             file.write("\n".join(Code.instructions))
+            file.write("\n; aqui termina o código gerado\n")
 
-            # Escrever as instruções finais: após término do código gerado            
-            file.write("\nmov esp, ebp ; reestabelece a pilha\n")
-            file.write("pop ebp\n\n")
-            file.write("; chamada da interrupcao de saida (Linux)\n")
-            file.write("mov eax, 1   \n")
-            file.write("xor ebx, ebx \n")
-            file.write("int 0x80     \n")
-            file.write("; Para Windows:\n")
-            file.write("; push dword 0        \n")
-            file.write("; call _ExitProcess@4\n")
+            file.write("\n; aqui começam as instruções finais:\n")
+            # Escrever as instruções finais: após término do código gerado
+            file.write('''
+                mov esp, ebp ; reestabelece a pilha
+                pop ebp
+            ''')
+            file.write("\n; chamada da interrupcao de saida (Linux)\n")
+            file.write('''
+                mov eax, 1   
+                xor ebx, ebx 
+                int 0x80     
+                \n; Para Windows:\n
+                \n; push dword 0\n        
+                \n; call _ExitProcess@4
+            ''')
 
 class Lexer:
     def __init__(self, source: str, position : int, next : Token):
@@ -101,20 +115,32 @@ class Lexer:
                 self.next = Token("IDEN", identificador)
         
         
+        elif self.source[self.position] == "\"":
+            self.position += 1
+            string_val = ""
+            while self.position < len(self.source) and self.source[self.position] != "\"":
+                string_val += self.source[self.position]
+                self.position += 1
+            if self.position < len(self.source) and self.source[self.position] == "\"":
+                self.position += 1  # Pula a aspa de fechamento
+                self.next = Token("STR", string_val)
+            else:
+                raise LexerError("String não fechada")
 
         elif self.source[self.position].isdigit():
-            number = ""
-            while self.position < len(self.source) and self.source[self.position].isdigit():
-                number += self.source[self.position]
-                self.position += 1
-            self.next = Token("INT", int(number))
-        
-        elif self.source[self.position] == "+":
-            self.next = Token("PLUS", self.source[self.position])
+            numero = self.source[self.position]
             self.position += 1
+            while self.position < len(self.source) and self.source[self.position].isdigit():
+                numero += self.source[self.position]
+                self.position += 1
+            self.next = Token("INT", int(numero))
 
         elif self.source[self.position] == "-":
             self.next = Token("MINUS", self.source[self.position])
+            self.position += 1
+
+        elif self.source[self.position] == "+":
+            self.next = Token("PLUS", self.source[self.position])
             self.position += 1
 
         elif self.source[self.position] == "*":
@@ -141,17 +167,6 @@ class Lexer:
             else:
                 self.next = Token("ASSIGN", self.source[self.position])
                 self.position += 1
-
-        elif self.source[self.position] == "\"":
-            self.position += 1  # Pula o primeiro "
-            string_value = ""
-            while self.position < len(self.source) and self.source[self.position] != "\"":
-                string_value += self.source[self.position]
-                self.position += 1
-            if self.position >= len(self.source):
-                raise LexerError("String malformada: faltando aspas de fechamento.")
-            self.position += 1  # Pula o último "
-            self.next = Token("STRING", string_value)
 
         elif self.source[self.position] == "\n":
             self.next = Token("END", "\\n")  # ou só "\n"
@@ -194,89 +209,90 @@ class Lexer:
         else:
             raise LexerError(f"Caracter inválido: {self.source[self.position]}")
         
-
-
 class Variable:
-    def __init__(self, value, type: str, shift: int = 0):
+    def __init__(self, value: int|str|bool, type: str):
         self.value = value
         self.type = type
-        self.shift = shift  # deslocamento na pilha (em bytes)
+        self.shift = 0  # deslocamento na pilha (em bytes)
 
-
+# Alterar a classe Variable criando o atributo shift para armazenar o deslocamento da pilha. Alterar os métodos da SymbolTable para considerar o novo atributo.
 class SymbolTable:
-    def __init__(self, table: dict[str, Variable]):
+    def __init__(self,table: dict[str, Variable]):
         self.table = table
-        self.next_shift = 0  # controla o próximo deslocamento livre (em bytes)
+        self.next_shift = 0 
 
-    def create_variable(self, name: str, type: str):
-        """
-        Cria uma variável nova na tabela, com deslocamento na pilha.
-        Lógica idêntica ao Roteiro 8: cada variável ocupa 4 bytes e
-        o shift cresce de 4 em 4.
-        """
-        if name in self.table.keys():
-            raise SemanticError(f"Variável '{name}' já declarada.")
-        self.next_shift += 4
-        self.table[name] = Variable(None, type, self.next_shift)
 
-    def set(self, var: str, value, type: str):
-        if var not in self.table.keys():
-            raise SemanticError(f"Erro: variável '{var}' não declarada")
+    def setter(self, var: str, value: int|str|bool, type: str):
+        if var not in self.table:
+            raise Exception(f"Erro: variável '{var}' não declarada")
         if self.table[var].type != type:
-            raise SemanticError(
-                f"Erro: tipo incorreto para variável '{var}'. "
-                f"Esperado '{self.table[var].type}', recebido '{type}'"
+            raise Exception(
+                f"Erro: tipo incorreto para variável '{var}'. Esperado '{self.table[var].type}', recebido '{type}'"
             )
         old = self.table[var]
-        # mantém o shift original
+        # mantém o shift original!
         self.table[var] = Variable(value, old.type, old.shift)
 
-    def getter(self, var: str) -> Variable:
+    def getter(self, var: str):
         if var not in self.table.keys():
-            raise SemanticError(f"Erro: variável '{var}' não declarada")
-        v = self.table[var]
-        return Variable(v.value, v.type, v.shift)
+            raise Exception(f"Erro: variável '{var}' não declarada")
+        return Variable(self.table[var].value, self.table[var].type, self.table[var].shift) # retorna o valor e o tipo da variável
+    def create_variable(self, var: str, type: str): # INT, STR, BOOL????????
+        if var in self.table.keys():
+            raise Exception(f"Erro: variável '{var}' já declarada")
+        self.next_shift += 4
+        self.table[var] = Variable(None, type, self.next_shift) 
 
-    # compat: se algum código usa get()
-    def get(self, name: str) -> Variable:
-        return self.getter(name)
 
+
+#   get uma variável da tabela
+    def get(self, name: str) -> Variable | None:
+        if name not in self.table.keys():
+            raise SemanticError(f"Variável '{name}' não declarada.")
+        """Getter: retorna uma variável da tabela."""
+        return Variable(self.table[name].value, self.table[name].type, self.table[name].shift)
 
 class Node:
     id = 0
-
-    @staticmethod
-    def new_id() -> int:
-        Node.id += 1
-        return Node.id
 
     def __init__(self, value, children: list):
         self.value = value
         self.children = children
         self.id = Node.new_id()
 
+    def new_id() -> int:
+        Node.id += 1
+        return Node.id
     def evaluate(self, st: SymbolTable):
+        """Método abstrato que deve ser sobrescrito nas subclasses."""
         pass
 
-    def generate(self, st: SymbolTable):
+    def generate(self):
+        """Método abstrato que deve ser sobrescrito nas subclasses."""
         pass
+    '''Cada nó terá uma implementação própria do generate(). Ler o PDF da aula para mais detalhes.
 
+    Lembrem-se que o retorno de um nó sempre acontecerá em EAX e você usará sempre o ECX como suporte. Não usar o EBX.
+
+    Não será gerado código para os nós que representam ou operam strings.'''
 
 class BinOp(Node):
+        
     def evaluate(self, st: SymbolTable):
-        l = self.children[0].evaluate(st)  # Variable
-        r = self.children[1].evaluate(st)  # Variable
+        l = self.children[0].evaluate(st)
+        r = self.children[1].evaluate(st)
         left_val_type, left_val = l.type, l.value
         right_val_type, right_val = r.type, r.value
 
-        def to_str(val, t):
-            if t == "bool":
+        def to_str(val,type):
+            if type == "bool":
                 return "true" if val != 0 else "false"
             return str(val)
+        
 
         if self.value == "PLUS":
             if left_val_type == "string" or right_val_type == "string":
-                return Variable(to_str(left_val, left_val_type) + to_str(right_val, right_val_type), "string")
+                return Variable(to_str(left_val,left_val_type) + to_str(right_val,right_val_type), "string")
             if left_val_type == right_val_type == "int":
                 return Variable(left_val + right_val, "int")
             raise SemanticError(f"Operação '+' inválida entre '{left_val_type}' e '{right_val_type}'")
@@ -310,7 +326,7 @@ class BinOp(Node):
                 return Variable(1 if str(left_val) < str(right_val) else 0, "bool")
             raise SemanticError(f"Operação '<' inválida entre '{left_val_type}' e '{right_val_type}'")
 
-        elif self.value == "GT":
+        elif self.value == "GT":   
             if left_val_type == right_val_type == "int":
                 return Variable(1 if left_val > right_val else 0, "bool")
             if left_val_type == right_val_type == "string":
@@ -328,8 +344,8 @@ class BinOp(Node):
             raise SemanticError(f"Operação '||' inválida entre '{left_val_type}' e '{right_val_type}'")
         else:
             raise SemanticError(f"Operador binário desconhecido: {self.value}")
-
-    def generate(self, st: SymbolTable):
+        
+    def generate(self):
         op = self.value
 
         # direita
@@ -339,16 +355,28 @@ class BinOp(Node):
         self.children[0].generate(st)
         Code.append("pop ecx")
 
-        if op == "PLUS":
+        if op == 'PLUS':
             Code.append("add eax, ecx")
-        elif op == "MINUS":
+        elif op == 'MINUS':
             Code.append("sub eax, ecx")
-        elif op == "MULT":
+        elif op == 'MULT':
             Code.append("imul ecx")
-        elif op == "DIV":
-            Code.append("cdq")
+        elif op == 'DIV':
+            # Divisão de inteiros: EDX:EAX / ECX -> EAX (quociente)
+            Code.append("cdq")       # estende o sinal p/ EDX
             Code.append("idiv ecx")
-        elif op == "AND":
+        elif op == 'AND':
+            # Converte em 0/1 e faz AND lógico
+            Code.append("cmp eax, 0")
+            Code.append("mov eax, 0")
+            Code.append("mov edx, 1")
+            Code.append("cmovne eax, edx")   # eax = (esq != 0) ? 1 : 0
+            Code.append("cmp ecx, 0")
+            Code.append("mov ecx, 0")
+            Code.append("mov edx, 1")
+            Code.append("cmovne ecx, edx")   # ecx = (dir != 0) ? 1 : 0
+            Code.append("and eax, ecx")      # 1 & 1 => 1, senão 0
+        elif op == 'OR':
             Code.append("cmp eax, 0")
             Code.append("mov eax, 0")
             Code.append("mov edx, 1")
@@ -357,164 +385,226 @@ class BinOp(Node):
             Code.append("mov ecx, 0")
             Code.append("mov edx, 1")
             Code.append("cmovne ecx, edx")
-            Code.append("and eax, ecx")
-        elif op == "OR":
-            Code.append("cmp eax, 0")
-            Code.append("mov eax, 0")
-            Code.append("mov edx, 1")
-            Code.append("cmovne eax, edx")
-            Code.append("cmp ecx, 0")
-            Code.append("mov ecx, 0")
-            Code.append("mov edx, 1")
-            Code.append("cmovne ecx, edx")
-            Code.append("or eax, ecx")
-        elif op in ("EQUAL", "GT", "LT"):
+            Code.append("or eax, ecx")       # 1 | x => 1
+        elif op in ('EQUAL', 'GT', 'LT'):
+            # relacionais: deixam 0/1 em EAX usando CMP + CMOV*
             Code.append("cmp eax, ecx")
             Code.append("mov eax, 0")
             Code.append("mov ecx, 1")
-            if op == "EQUAL":
+            if op == 'EQUAL':
                 Code.append("cmove eax, ecx")
-            elif op == "GT":
+            elif op == 'GT':
                 Code.append("cmovg eax, ecx")
-            elif op == "LT":
+            elif op == 'LT':
                 Code.append("cmovl eax, ecx")
         else:
-            raise SemanticError(f"Operador inválido em generate(): {op}")
+            raise Exception(f"Operador inválido: {op}")
+    
+
 
 
 class UnOp(Node):
+
     def evaluate(self, st: SymbolTable):
-        child_val = self.children[0].evaluate(st)
+        val = self.children[0].evaluate(st)
 
         if self.value == "PLUS":
-            if child_val.type != "int":
-                raise SemanticError("Operador unário '+' exige int")
-            return Variable(+child_val.value, "int")
+            if val.type != "int":
+                raise SemanticError(f"Operação unária '+' inválida para '{val.type}'")
+            return Variable(val.value, "int")
         elif self.value == "MINUS":
-            if child_val.type != "int":
-                raise SemanticError("Operador unário '-' exige int")
-            return Variable(-child_val.value, "int")
+            if val.type != "int":
+                raise SemanticError(f"Operação unária '-' inválida para '{val.type}'")
+            return Variable(-val.value, "int")
         elif self.value == "NOT":
-            if child_val.type != "bool":
-                raise SemanticError("Operador '!' exige bool")
-            return Variable(0 if child_val.value else 1, "bool")
+            if val.type != "bool":
+                raise SemanticError(f"Operação unária '!' inválida para '{val.type}'")
+            return Variable(0 if val.value else 1, "bool")
         else:
-            raise SemanticError(f"Operador unário inválido '{self.value}'")
+            raise SemanticError(f"Operador unário desconhecido: {self.value}")
 
-    def generate(self, st: SymbolTable):
-        self.children[0].generate(st)
-        if self.value == "PLUS":
+    def generate(self, st):
+        self.children[0].generate(st)  # resultado em EAX
+        if self.value == 'PLUS':
             Code.append("; unary plus (noop)")
-        elif self.value == "MINUS":
+        elif self.value == 'MINUS':
             Code.append("neg eax ; unary minus")
-        elif self.value == "NOT":
+        elif self.value == 'NOT':
+            # espera booleano 0/1 em EAX e devolve 0->1, !=0->0
+            # estratégia: if eax==0 => eax=1 else eax=0
             Code.append("cmp eax, 0")
             Code.append("mov ecx, 1")
             Code.append("mov eax, 0")
             Code.append("cmove eax, ecx ; !bool")
         else:
-            raise SemanticError(f"Operador unário inválido em generate(): {self.value}")
-
+            raise Exception(f"Operador unário inválido: {self.value}")
 
 class IntVal(Node):
     def evaluate(self, st: SymbolTable):
         return Variable(self.value, "int")
-
-    def generate(self, st: SymbolTable):
+    
+    def generate(self):
         Code.append(f"mov eax, {self.value} ; IntVal")
 
+    
+
+class NoOp(Node):
+    def evaluate(self, st):
+        pass
+
+class Assignment(Node):
+    def evaluate(self, st: SymbolTable):
+        var_name = self.children[0].value
+        var_value = self.children[1].evaluate(st)   # var_value é Variable
+        st.set(var_name, var_value.value, var_value.type)  # << AQUI
+
+
+    def generate(self, st):
+        var_name = self.children[0].value
+        var = st.getter(var_name)
+        self.children[1].generate(st)  # valor em EAX
+        Code.append(f"mov [ebp-{var.shift}], eax ; {var_name} = expr")
+    
+
+class Identifier(Node):
+    def evaluate(self, st: SymbolTable):
+        return st.get(self.value)
+    
+    def generate(self, st):
+        var = st.getter(self.value)
+        if var.shift is None:
+            raise Exception("Identifier sem shift (não é variável local).")
+        Code.append(f"mov eax, [ebp-{var.shift}] ; Identifier {self.value}")
+         
+        
 
 class BoolVal(Node):
+
     def evaluate(self, st: SymbolTable):
         return Variable(1 if self.value else 0, "bool")
-
+    
     def generate(self, st: SymbolTable):
-        v = 1 if self.value else 0
-        Code.append(f"mov eax, {v} ; BoolVal")
-
+        val = 1 if self.value else 0
+        Code.append(f"mov eax, {val} ; BoolVal")
 
 class StringVal(Node):
     def evaluate(self, st: SymbolTable):
         return Variable(self.value, "string")
 
     def generate(self, st: SymbolTable):
-        raise SemanticError("Geração de código para 'string' não suportada no Roteiro 8.")
+        raise Exception("Geração de código para 'string' não suportada no Roteiro 8.")
+    
+    
+class VarDec(Node):
+    def evaluate(self, st):
+        var_name = self.children[0].value
+        dec_type = self.value  # "int" | "string" | "bool"
+    
+        if dec_type not in ("int", "string", "bool"):
+            raise SemanticError(f"Tipo de variável desconhecido: {dec_type}")
 
+        defaults = {"int": 0, "string": "", "bool": 0}
 
-class Identifier(Node):
-    def evaluate(self, st: SymbolTable):
-        return st.getter(self.value)
+        if len(self.children) == 2:
+            rhs = self.children[1].evaluate(st)  # rhs é um Variable
+            if rhs.type != dec_type:
+                raise SemanticError(
+                    f"Tipo incompatível na inicialização da variável '{var_name}'. "
+                    f"Esperado '{dec_type}', recebido '{rhs.type}'."
+                )
+            st.create_variable(var_name, Variable(rhs.value, dec_type))
+            # opcional: já retorna a variável criada
+            return Variable(rhs.value, dec_type)
+
+        # sem inicialização
+        dv = defaults[dec_type]
+        st.create_variable(var_name, Variable(dv, dec_type))
+        return Variable(dv, dec_type)
 
     def generate(self, st: SymbolTable):
-        var = st.getter(self.value)
-        if var.shift is None:
-            raise SemanticError("Identifier sem shift na pilha.")
-        Code.append(f"mov eax, [ebp-{var.shift}] ; {self.value}")
+        var_name = self.children[0].value
+        dec_type = self.value  # "number" | "boolean" | "string"
 
+        if dec_type == "string":
+            raise Exception("Strings não têm geração de código neste roteiro.")
+
+        # reserva 4 bytes na pilha
+        Code.append("sub esp, 4 ; aloca espaço para variável")
+
+        # registra a variável 
+        st.create_variable(var_name, dec_type)
+        var = st.getter(var_name)  # tem var.shift
+
+        # inicialização 
+        if len(self.children) == 2:
+            # gera a expressão (resultado em EAX)
+            self.children[1].generate(st)
+            Code.append(f"mov [ebp-{var.shift}], eax ; {var_name} = expr (init)")
+        else:
+            Code.append(f"mov dword [ebp-{var.shift}], 0 ; {var_name} = 0 (default)")
+
+
+
+class Block(Node):
+    def evaluate(self, st: SymbolTable):
+        for stmt in self.children:
+            stmt.evaluate(st)
+
+    def generate(self, st):
+        for child in self.children:
+            child.generate(st)
 
 class Print(Node):
     def evaluate(self, st: SymbolTable):
         value = self.children[0].evaluate(st)
         if value.type == "bool":
-            print("true" if value.value != 0 else "false")
+            print ("true" if value.value != 0 else "false")
         else:
             print(value.value)
-
-    def generate(self, st: SymbolTable):
-        self.children[0].generate(st)  # resultado em EAX
+    
+    def generate(self, st):
+        self.children[0].generate(st)     # valor em EAX
         Code.append("push eax")
         Code.append("push format_out")
         Code.append("call printf")
         Code.append("add esp, 8")
-
-
-class Read(Node):
-    def evaluate(self, st: SymbolTable):
-        value = int(input())
-        return Variable(value, "int")
-
-    def generate(self, st: SymbolTable):
-        Code.append("push scan_int")
-        Code.append("push format_in")
-        Code.append("call scanf")
-        Code.append("add esp, 8")
-        Code.append("mov eax, dword [scan_int] ; Read()")
-
 
 class While(Node):
     def evaluate(self, st: SymbolTable):
         condicao = self.children[0].evaluate(st)
         if condicao.type != "bool":
             raise SemanticError("Condição do 'while' deve ser do tipo bool.")
-        while self.children[0].evaluate(st).value != 0:
+        
+        while self.children[0].evaluate(st).value != 0: # 0 é falso
             self.children[1].evaluate(st)
 
     def generate(self, st: SymbolTable):
         my = self.id
         Code.append(f"loop_{my}:")
-        self.children[0].generate(st)  # condição -> EAX
+        self.children[0].generate(st)   # condição -> EAX
         Code.append("cmp eax, 0")
         Code.append(f"je exit_{my}")
-        self.children[1].generate(st)  # corpo
+        self.children[1].generate(st)   # corpo
         Code.append(f"jmp loop_{my}")
         Code.append(f"exit_{my}:")
-
+          
+            
 
 class If(Node):
     def evaluate(self, st: SymbolTable):
         condicao = self.children[0].evaluate(st)
         if condicao.type != "bool":
             raise SemanticError("Condição do 'if' deve ser do tipo bool.")
-        if condicao.value != 0:
+        
+        if condicao != 0: # 0 é falso
             self.children[1].evaluate(st)
-        elif len(self.children) == 3:
+        elif len(self.children) == 3: # existe o bloco else
             self.children[2].evaluate(st)
-
-    def generate(self, st: SymbolTable):
+    
+    def generate(self, st):
         my = self.id
-        self.children[0].generate(st)  # cond em EAX
+        self.children[0].generate(st)      # cond em EAX
         Code.append("cmp eax, 0")
-
         if len(self.children) == 2:
             Code.append(f"je exit_{my}")
             self.children[1].generate(st)  # then
@@ -527,83 +617,21 @@ class If(Node):
             self.children[2].generate(st)  # else
             Code.append(f"exit_{my}:")
 
-
-class VarDec(Node):
+            
+class Read(Node):
     def evaluate(self, st: SymbolTable):
-        var_name = self.children[0].value
-        dec_type = self.value  # "int" | "string" | "bool"
-
-        if dec_type not in ("int", "string", "bool"):
-            raise SemanticError(f"Tipo de variável desconhecido: {dec_type}")
-
-        defaults = {"int": 0, "string": "", "bool": 0}
-
-        if len(self.children) == 2:
-            rhs = self.children[1].evaluate(st)
-            if rhs.type != dec_type:
-                raise SemanticError(
-                    f"Tipo incompatível na inicialização da variável '{var_name}'. "
-                    f"Esperado '{dec_type}', recebido '{rhs.type}'."
-                )
-            st.create_variable(var_name, dec_type)
-            st.set(var_name, rhs.value, rhs.type)
-            return Variable(rhs.value, dec_type)
-
-        dv = defaults[dec_type]
-        st.create_variable(var_name, dec_type)
-        st.set(var_name, dv, dec_type)
-        return Variable(dv, dec_type)
-
-    def generate(self, st: SymbolTable):
-        var_name = self.children[0].value
-        dec_type = self.value  # "int" | "bool" | "string"
-
-        if dec_type == "string":
-            raise SemanticError("Strings não têm geração de código neste roteiro.")
-
-        # reserva 4 bytes na pilha
-        Code.append("sub esp, 4 ; aloca espaço para variável")
-
-        # registra variável na tabela
-        st.create_variable(var_name, dec_type)
-        var = st.getter(var_name)
-
-        if len(self.children) == 2:
-            self.children[1].generate(st)
-            Code.append(f"mov [ebp-{var.shift}], eax ; {var_name} = expr (init)")
-        else:
-            Code.append(f"mov dword [ebp-{var.shift}], 0 ; {var_name} = 0 (default)")
+        value = int(input())
+        return Variable(value, "int")
+    
+    def generate(self, st):
+        Code.append("push scan_int")
+        Code.append("push format_in")
+        Code.append("call scanf")
+        Code.append("add esp, 8")
+        Code.append("mov eax, dword [scan_int] ; Read()")
+    
 
 
-class Assignment(Node):
-    def evaluate(self, st: SymbolTable):
-        var_name = self.children[0].value
-        var_value = self.children[1].evaluate(st)
-        st.set(var_name, var_value.value, var_value.type)
-
-    def generate(self, st: SymbolTable):
-        var_name = self.children[0].value
-        var = st.getter(var_name)
-        self.children[1].generate(st)
-        Code.append(f"mov [ebp-{var.shift}], eax ; {var_name} = expr")
-
-
-class Block(Node):
-    def evaluate(self, st: SymbolTable):
-        for stmt in self.children:
-            stmt.evaluate(st)
-
-    def generate(self, st: SymbolTable):
-        for stmt in self.children:
-            stmt.generate(st)
-
-
-class NoOp(Node):
-    def evaluate(self, st: SymbolTable):
-        pass
-
-    def generate(self, st: SymbolTable):
-        pass
 
 
 class Parser:
@@ -621,21 +649,22 @@ class Parser:
                 node = Parser.parse_statement()
                 children.append(node)
             if Parser.lex.next.kind == "CLOSE_BRA":
-                Parser.lex.select_next() # Consome o "} "
-                if Parser.lex.next.kind == "END":
-                    Parser.lex.select_next() # Consome o "\n"
-                else:
-                    raise ParserError("Erro: esperado fim de linha após bloco.")
+                if len(children) == 0:
+                    raise ParserError("Erro: bloco vazio não é permitido")
+                Parser.lex.select_next() # Avança para o próximo token
                 return Block("BLOCK", children)
             else:
-                raise ParserError("Erro: '}' esperado ao final do bloco.")
+                raise ParserError("Erro: esperado '}' no final do bloco")
         else:
-            raise ParserError("Erro: '{' esperado para iniciar um bloco.")
-        
+            raise ParserError("Erro: esperado '{' no início do bloco")
+    
+
+
     def parse_statement() -> Node:
         if Parser.lex.next.kind == "END":
+            folha = NoOp("NoOp", [])
             Parser.lex.select_next()
-            return NoOp("NOOP",[])
+            return folha
         
         elif Parser.lex.next.kind == "IDEN":
             id_node = Identifier(Parser.lex.next.value, [])
@@ -669,19 +698,23 @@ class Parser:
             if Parser.lex.next.kind != "IDEN":
                 raise ParserError("Esperado identificador após 'var'.")
             id_node = Identifier(Parser.lex.next.value, [])
+
             Parser.lex.select_next()
             if Parser.lex.next.kind != "TYPE":
-                raise ParserError("Esperado tipo da variável após identificador.")
-            type_node = Parser.lex.next.value  # "int", "string", "bool"
+                raise ParserError("Esperado tipo após identificador.")
+            
+            type_node = Parser.lex.next.value
             Parser.lex.select_next()
+
             expr_node = None
             if Parser.lex.next.kind == "ASSIGN":
                 Parser.lex.select_next()
                 expr_node = Parser.parseBoolExpression()
+                
+            
             if Parser.lex.next.kind != "END":
-                raise ParserError("Esperado fim de linha após declaração de variável.")
+                raise ParserError("Esperado fim de linha após declaração.")
             Parser.lex.select_next()
-            # Cria o nó VarDec. Se existir inicialização, ela vai como child.
             return VarDec(type_node, [id_node] + ([expr_node] if expr_node else []))
         
         elif Parser.lex.next.kind == "WHILE":
@@ -696,7 +729,6 @@ class Parser:
             Parser.lex.select_next()
             if Parser.lex.next.kind != "OPEN_PAR":
                 raise ParserError("Esperado '(' após 'Println'.")
-        
             Parser.lex.select_next()
             expr_node = Parser.parseBoolExpression()
             if Parser.lex.next.kind != "CLOSE_PAR":
@@ -713,36 +745,38 @@ class Parser:
         else:
             raise ParserError(f"Token inesperado: {Parser.lex.next.kind}")
         
-    def parseBoolExpression():
-        node = Parser.parse_expression()
-        while Parser.lex.next.kind in ("EQUAL", "LT", "GT"):
-            if Parser.lex.next.kind == "EQUAL":
-                Parser.lex.select_next()
-                node = BinOp("EQUAL", [node, Parser.parse_expression()])
-            elif Parser.lex.next.kind == "LT":
-                Parser.lex.select_next()
-                node = BinOp("LT", [node, Parser.parse_expression()])
-            elif Parser.lex.next.kind == "GT":
-                Parser.lex.select_next()
-                node = BinOp("GT", [node, Parser.parse_expression()])
+
+    def parseBoolExpression() -> int:
+        node = Parser.parseBoolTerm()
+        if Parser.lex.next.kind == "OR":
+            Parser.lex.select_next()
+            node = BinOp("OR", [node, Parser.parseBoolTerm()])
         return node
-        
     
-    def parse_expression():
+    def parseBoolTerm() -> int:
+        node = Parser.parser_relExpression()
+        if Parser.lex.next.kind == "AND":
+            Parser.lex.select_next()
+            node = BinOp("AND", [node, Parser.parser_relExpression()])
+        return node
+    
+    def parser_relExpression() -> int:
+        node = Parser.parse_expression()
+        if Parser.lex.next.kind in ("EQUAL", "LT", "GT"):
+            op = Parser.lex.next.kind
+            Parser.lex.select_next()
+            node = BinOp(op, [node, Parser.parse_expression()])
+        return node
+
+    def parse_expression() -> int:
         node = Parser.parse_term()
-        while Parser.lex.next.kind in ("PLUS","MINUS","AND","OR"):
+        while Parser.lex.next.kind in ("PLUS", "MINUS"):
             if Parser.lex.next.kind == "PLUS":
                 Parser.lex.select_next()
                 node = BinOp("PLUS", [node, Parser.parse_term()])
             elif Parser.lex.next.kind == "MINUS":
                 Parser.lex.select_next()
                 node = BinOp("MINUS", [node, Parser.parse_term()])
-            elif Parser.lex.next.kind == "AND":
-                Parser.lex.select_next()
-                node = BinOp("AND", [node, Parser.parse_term()])
-            elif Parser.lex.next.kind == "OR":
-                Parser.lex.select_next()
-                node = BinOp("OR", [node, Parser.parse_term()])
         return node
 
     def parse_term():
@@ -773,44 +807,42 @@ class Parser:
                 raise ParserError("Faltando )")
             Parser.lex.select_next()
             return node
-        
-        elif Parser.lex.next.kind == "IDEN":
-            node = Identifier(Parser.lex.next.value, [])
-            Parser.lex.select_next()
-            return node
-        
-        elif Parser.lex.next.kind == "STRING":
-            node = StringVal(Parser.lex.next.value,[])
-            Parser.lex.select_next()
-            return node
-        
         elif Parser.lex.next.kind == "BOOL":
-            node = BoolVal(Parser.lex.next.value, [])
+            node = BoolVal(Parser.lex.next.value,[])
+            Parser.lex.select_next()
+            return node
+        elif Parser.lex.next.kind == "STR":
+            node = StringVal(Parser.lex.next.value,[])
             Parser.lex.select_next()
             return node
         
         elif Parser.lex.next.kind == "READ":
             Parser.lex.select_next()
             if Parser.lex.next.kind != "OPEN_PAR":
-                raise ParserError("Faltando '(' após Read.")
+                raise ParserError("Esperado '(' após 'Scanln'.")
             Parser.lex.select_next()
             if Parser.lex.next.kind != "CLOSE_PAR":
-                raise ParserError("Faltando ')' após Read.")
+                raise ParserError("Esperado ')' após 'Scanln('.")
             Parser.lex.select_next()
             return Read("READ", [])
-        
-        elif Parser.lex.next.kind == "PLUS":
-            Parser.lex.select_next()
-            return UnOp("PLUS", [Parser.parse_factor()])
-        
-        elif Parser.lex.next.kind == "MINUS":
-            Parser.lex.select_next()
-            return UnOp("MINUS", [Parser.parse_factor()])
         
         elif Parser.lex.next.kind == "NOT":
             Parser.lex.select_next()
             return UnOp("NOT", [Parser.parse_factor()])
         
+        elif Parser.lex.next.kind == "MINUS":
+            Parser.lex.select_next()
+            return UnOp("MINUS", [Parser.parse_factor()])
+        
+        elif Parser.lex.next.kind == "PLUS":
+            Parser.lex.select_next()
+            return UnOp("PLUS", [Parser.parse_factor()])
+        
+        elif Parser.lex.next.kind == "IDEN":
+            node = Identifier(Parser.lex.next.value, [])
+            Parser.lex.select_next()
+            return node
+
         else:
             raise ParserError(f"Erro: token inesperado '{Parser.lex.next.kind}'")
         
@@ -826,10 +858,8 @@ class Parser:
         ast = Parser.parse_program()
         if Parser.lex.next.kind != "EOF":
             raise ParserError("Tokens remanescentes após o fim do programa.")
-        
         return ast
- 
-
+    
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Uso: python3 main.py teste.go")
@@ -860,7 +890,7 @@ if __name__ == "__main__":
         # --- fase SEMÂNTICA/EXECUÇÃO ---
         try:
             st = SymbolTable({})
-            root.evaluate(st)
+            root.generate(st)
         except SemanticError as e:
             print(f"[Semantic] {e}")
             sys.exit(1)
