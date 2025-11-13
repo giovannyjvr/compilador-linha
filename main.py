@@ -52,8 +52,8 @@ class Lexer:
                 "else": "ELSE",
                 "for": "WHILE",
                 "Scanln": "READ",
-                "func": "FUNC",        # Roteiro 9
-                "return": "RETURN",    # Roteiro 9
+                "func": "FUNC",
+                "return": "RETURN",
             }
 
             idnt = self.source[self.position]
@@ -87,7 +87,8 @@ class Lexer:
                 self.position += 1
                 self.next = Token("STR", string_val)
                 return
-            raise Exception("[Parser] String não fechada")
+            # chegou EOF sem fechar
+            raise Exception("[Lexer] Unterminated string (unexpected EOF)")
 
         # números
         if ch.isdigit():
@@ -141,13 +142,13 @@ class Lexer:
             return
 
         if ch == ",":
-            self.next = Token("COMMA", ch)  # Roteiro 9
+            self.next = Token("COMMA", ch)
             self.position += 1
             return
 
         # comparação/atribuição
         if ch == "=":
-            if self.position + 1 < len(self.source) and self.source[self.position + 1] == "=":
+            if self.position + 1 < len(self.source) and self.source[self.position + 1] == "==":
                 self.next = Token("EQUAL", "==")
                 self.position += 2
             else:
@@ -172,14 +173,14 @@ class Lexer:
                 self.next = Token("AND", "&&")
                 self.position += 2
                 return
-            raise Exception(f"[Parser] Caracter inválido: {ch}")
+            raise Exception("[Lexer] Invalid '&' (expected '&&')")
 
         if ch == "|":
             if self.position + 1 < len(self.source) and self.source[self.position + 1] == "|":
                 self.next = Token("OR", "||")
                 self.position += 2
                 return
-            raise Exception(f"[Parser] Caracter inválido: {ch}")
+            raise Exception("[Lexer] Invalid '|' (expected '||')")
 
         if ch == "!":
             self.next = Token("NOT", "!")
@@ -192,7 +193,8 @@ class Lexer:
             self.position += 1
             return
 
-        raise Exception(f"[Parser] Caracter inválido: {ch}")
+        # caractere inesperado
+        raise Exception(f"[Lexer] Invalid character: {ch}")
 
 
 # =============================
@@ -330,10 +332,16 @@ class UnOp(Node):
     def evaluate(self, st: SymbolTable):
         val = self.children[0].evaluate(st)
         if self.value == "PLUS":
+            if val.type != "int":
+                raise Exception("[Semantic] Unary '+' expects int")
             return Variable(val.value, "int")
         elif self.value == "MINUS":
+            if val.type != "int":
+                raise Exception("[Semantic] Unary '-' expects int")
             return Variable(-val.value, "int")
         elif self.value == "NOT":
+            if val.type != "bool":
+                raise Exception("[Semantic] '!' expects bool")
             return Variable(0 if val.value else 1, "bool")
         else:
             raise Exception(f"[Parser] Operador unário desconhecido: {self.value}")
@@ -413,7 +421,7 @@ class Read(Node):
 # ===== Controle de fluxo com 'return' via exceção =====
 
 class ReturnException(Exception):
-    def __init__(self, value: Variable):
+    def __init__(self, value: 'Variable|None'):
         super().__init__("Return")
         self.value = value
 
@@ -511,7 +519,7 @@ class FuncCall(Node):
             default = 0 if param_type == "int" else ("" if param_type == "string" else 0)
             call_st.create_variable(param_name, Variable(default, param_type))
 
-            # avaliar o argumento no escopo de chamada do *caller*
+            # avaliar o argumento no escopo do caller
             arg_val = arg_expr.evaluate(st)
             if arg_val.type != param_type:
                 raise Exception(f"[Semantic] Tipo do argumento '{param_name}' inválido: esperado {param_type}, recebeu {arg_val.type}")
@@ -527,6 +535,8 @@ class FuncCall(Node):
         # checar tipo de retorno
         ret_type = func_node.value  # "int"|"string"|"bool"|"void"
         if ret_type == "void":
+            if isinstance(ret_value, Variable):
+                raise Exception("[Semantic] Invalid return in a void function")
             return Variable(None, "void")
         else:
             if not isinstance(ret_value, Variable):
@@ -558,14 +568,15 @@ class Parser:
     @staticmethod
     def parse_program() -> Block:
         """
-        Programa = { DeclFunc | DeclVar | Statement }*  EOF
+        Programa = { DeclFunc | Statement }*  EOF
+        (Funções só no topo. Decl var global não suportada aqui.)
         """
         statements = []
         while Parser.lex.next.kind != "EOF":
             if Parser.lex.next.kind == "FUNC":
                 statements.append(Parser.parse_func_declaration())
             else:
-                statements.append(Parser.parse_statement())
+                statements.append(Parser.parse_statement(top_level=True))
         return Block("BLOCK", statements)
 
     @staticmethod
@@ -630,11 +641,17 @@ class Parser:
         return FuncDec(ret_type, [func_name] + params + [body])
 
     @staticmethod
-    def parse_statement() -> Node:
+    def parse_statement(top_level: bool = False) -> Node:
         if Parser.lex.next.kind == "END":
             folha = NoOp("NoOp", [])
             Parser.lex.select_next()
             return folha
+
+        # PROÍBE função dentro de bloco
+        if Parser.lex.next.kind == "FUNC":
+            if top_level:
+                return Parser.parse_func_declaration()
+            Parser.parser_error("Unexpected 'func' inside block")
 
         elif Parser.lex.next.kind == "RETURN":
             Parser.lex.select_next()
@@ -746,10 +763,6 @@ class Parser:
         elif Parser.lex.next.kind == "OPEN_BRA":
             return Parser.parse_block()
 
-        elif Parser.lex.next.kind == "FUNC":
-            # permite função fora de parse_program (robustez)
-            return Parser.parse_func_declaration()
-
         else:
             Parser.parser_error(f"Token inesperado: {Parser.lex.next.kind}")
 
@@ -791,7 +804,6 @@ class Parser:
         while Parser.lex.next.kind in ("PLUS", "MINUS"):
             op = Parser.lex.next.kind
             Parser.lex.select_next()
-            # valida início do fator à direita
             if not Parser.token_starts_factor(Parser.lex.next.kind):
                 sym = "+" if op == "PLUS" else "-"
                 Parser.parser_error(f"Missing expression after {sym}")
@@ -920,7 +932,7 @@ if __name__ == "__main__":
         root = Parser.run(code)
         global_st = SymbolTable({})
 
-        # 1) avalia topo: registra funções, inicializa globais
+        # 1) avalia topo: registra funções
         root.evaluate(global_st)
 
         # 2) chama main() automaticamente (sem argumentos)
@@ -928,6 +940,6 @@ if __name__ == "__main__":
         _ = call_main.evaluate(global_st)
 
     except Exception as e:
-        # já vem prefixado com [Parser] ou [Semantic] nos pontos que importam
+        # Saída padronizada de erro
         print(str(e))
         sys.exit(1)
